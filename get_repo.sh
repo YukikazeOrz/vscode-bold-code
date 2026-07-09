@@ -67,7 +67,7 @@ mkdir -p vscode
 cd vscode || { echo "'vscode' dir not found"; exit 1; }
 
 git init -q
-git remote add origin https://github.com/Microsoft/vscode.git
+git remote add origin https://github.com/Microsoft/vscode.git 2>/dev/null || git remote set-url origin https://github.com/Microsoft/vscode.git
 
 # figure out latest tag by calling MS update API
 if [[ -z "${MS_TAG}" ]]; then
@@ -94,6 +94,14 @@ echo "MS_COMMIT=\"${MS_COMMIT}\""
 
 git fetch --depth 1 origin "${MS_COMMIT}"
 git checkout FETCH_HEAD
+
+# `git checkout` above is a no-op for the working tree when FETCH_HEAD is
+# already the checked-out commit (e.g. re-running this script after a build
+# failed partway through prepare_vscode.sh) -- it does NOT discard local
+# modifications or restore files deleted by an earlier apply_actions run.
+# Force back to a pristine tree on every run so retries are deterministic.
+git reset -q --hard FETCH_HEAD
+git clean -q -fdx
 
 cd ..
 

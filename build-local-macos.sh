@@ -52,12 +52,43 @@ fi
 
 echo "== Prerequisite checks =="
 command -v jq >/dev/null || { echo "jq is required (brew install jq)" >&2; exit 1; }
-command -v node >/dev/null || { echo "node is required — see .nvmrc for the expected version" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools are required (run: xcode-select --install)" >&2; exit 1; }
 
+# Homebrew's rustup formula symlinks only the `rustup` binary itself into
+# /opt/homebrew/bin; cargo/rustc/etc. stay in the keg-only opt dir (to avoid
+# clashing with the separate `rust` formula). So `command -v rustup` alone
+# can succeed while `cargo` is still unresolvable -- always prepend the
+# keg-only dir rather than gating on rustup already being found.
+if [[ -d "/opt/homebrew/opt/rustup/bin" ]]; then
+  export PATH="/opt/homebrew/opt/rustup/bin:${PATH}"
+fi
+command -v rustup >/dev/null || { echo "rustup is required (brew install rustup)" >&2; exit 1; }
+
 if [[ -f ".nvmrc" ]]; then
   REQUIRED_NODE=$(cat .nvmrc)
+  CURRENT_NODE=$(command -v node >/dev/null && node --version | sed 's/^v//' || echo "")
+  if [[ "${CURRENT_NODE%%.*}" != "${REQUIRED_NODE%%.*}" ]]; then
+    # This script is invoked as a non-interactive, non-login subprocess, so
+    # it never sources ~/.zshrc — nvm's PATH change in an interactive parent
+    # shell does NOT reach here on its own. Load nvm and switch ourselves
+    # rather than relying on the caller's shell already having done so.
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
+      . "${NVM_DIR}/nvm.sh"
+    elif [[ -s "/opt/homebrew/opt/nvm/nvm.sh" ]]; then
+      . "/opt/homebrew/opt/nvm/nvm.sh"
+    fi
+    if command -v nvm >/dev/null 2>&1; then
+      nvm use "${REQUIRED_NODE}" >/dev/null 2>&1 || nvm install "${REQUIRED_NODE}" >/dev/null 2>&1
+      CURRENT_NODE=$(node --version | sed 's/^v//')
+    fi
+  fi
+fi
+
+command -v node >/dev/null || { echo "node is required — see .nvmrc for the expected version" >&2; exit 1; }
+
+if [[ -f ".nvmrc" ]]; then
   CURRENT_NODE=$(node --version | sed 's/^v//')
   if [[ "${CURRENT_NODE%%.*}" != "${REQUIRED_NODE%%.*}" ]]; then
     echo "Warning: .nvmrc wants Node ${REQUIRED_NODE}, but 'node' resolves to ${CURRENT_NODE}. Native module builds may fail — use nvm/fnm to switch." >&2
