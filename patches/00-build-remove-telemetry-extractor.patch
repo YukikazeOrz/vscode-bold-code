@@ -1,0 +1,69 @@
+diff --git a/package-lock.json b/package-lock.json
+index 6233390..8f4bde6 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -106,7 +106,6 @@
+         "@vscode/component-explorer-cli": "^0.2.1-27",
+         "@vscode/gulp-electron": "1.41.3",
+         "@vscode/l10n-dev": "0.0.35",
+-        "@vscode/telemetry-extractor": "^1.20.2",
+         "@vscode/test-cli": "^0.0.6",
+         "@vscode/test-electron": "^2.4.0",
+         "@vscode/test-web": "^0.0.76",
+@@ -3882,19 +3881,6 @@
+         "@vscode/windows-ca-certs": "^0.3.1"
+       }
+     },
+-    "node_modules/@vscode/ripgrep": {
+-      "version": "1.17.1",
+-      "resolved": "https://registry.npmjs.org/@vscode/ripgrep/-/ripgrep-1.17.1.tgz",
+-      "integrity": "sha512-xTs7DGyAO3IsJYOCTBP8LnTvPiYVKEuyv8s0xyJDBXfs8rhBfqnZPvb6xDT+RnwWzcXqW27xLS/aGrkjX7lNWw==",
+-      "dev": true,
+-      "hasInstallScript": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "https-proxy-agent": "^7.0.2",
+-        "proxy-from-env": "^1.1.0",
+-        "yauzl": "^2.9.2"
+-      }
+-    },
+     "node_modules/@vscode/ripgrep-universal": {
+       "version": "1.18.0",
+       "resolved": "https://registry.npmjs.org/@vscode/ripgrep-universal/-/ripgrep-universal-1.18.0.tgz",
+@@ -3979,24 +3964,6 @@
+       "integrity": "sha512-gcXoCN00METUNFeQOFJ+C9xUI0DKB+0EGMVg7wbVYRHBw2Eq3fKisDZOkRdOz3kqXRKOENMfShPOmypw1/8nOw==",
+       "license": "MIT"
+     },
+-    "node_modules/@vscode/telemetry-extractor": {
+-      "version": "1.20.2",
+-      "resolved": "https://registry.npmjs.org/@vscode/telemetry-extractor/-/telemetry-extractor-1.20.2.tgz",
+-      "integrity": "sha512-NWiWaJrOK8TPATXzy+YKdMOR/N2onupiaorbseERtbovXTtdF8DwKLPqY9PVYdxdO1MwLuXKvKssyH1/5BzbiQ==",
+-      "dev": true,
+-      "license": "MIT",
+-      "dependencies": {
+-        "@vscode/ripgrep": "^1.15.10",
+-        "command-line-args": "^6.0.1",
+-        "ts-morph": "^25.0.1"
+-      },
+-      "bin": {
+-        "vscode-telemetry-extractor": "out/extractor.js"
+-      },
+-      "engines": {
+-        "node": ">=18"
+-      }
+-    },
+     "node_modules/@vscode/test-cli": {
+       "version": "0.0.6",
+       "resolved": "https://registry.npmjs.org/@vscode/test-cli/-/test-cli-0.0.6.tgz",
+diff --git a/package.json b/package.json
+index 49c2d08..aee2388 100644
+--- a/package.json
++++ b/package.json
+@@ -186,7 +186,6 @@
+     "@vscode/component-explorer-cli": "^0.2.1-27",
+     "@vscode/gulp-electron": "1.41.3",
+     "@vscode/l10n-dev": "0.0.35",
+-    "@vscode/telemetry-extractor": "^1.20.2",
+     "@vscode/test-cli": "^0.0.6",
+     "@vscode/test-electron": "^2.4.0",
+     "@vscode/test-web": "^0.0.76",

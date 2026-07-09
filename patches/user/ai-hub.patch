@@ -259,34 +259,40 @@ new file mode 100644
 index 00000000..36739528
 --- /dev/null
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,27 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
 + *--------------------------------------------------------------------------------------------*/
 +
-+import { URI } from '../../../../base/common/uri.js';
-+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
++import { IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
++import { IEditorService, ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
 +
 +/**
-+ * Opens the AI gateway login/key-management page in the user's default external browser.
-+ * This can't be an embedded webview iframe: the gateway sends `X-Frame-Options: DENY` and a
-+ * `frame-ancestors 'none'` CSP, which refuses embedding in any iframe regardless of sandboxing
-+ * on our side. Importing a key from here still requires manual copy/paste (see
-+ * aiHub.contribution.ts) since an external browser tab can't postMessage back into the editor.
++ * Opens the AI gateway login/key-management page in VS Code's integrated browser editor.
++ * This is a real editor tab backed by BrowserView, not an iframe inside the AI Settings webview.
 + */
-+export function openAiGateway(openerService: IOpenerService, gatewayUrl: string): void {
++export async function openAiGateway(browserViewService: IBrowserViewWorkbenchService, editorService: IEditorService, gatewayUrl: string): Promise<void> {
 +	if (!gatewayUrl) {
 +		return;
 +	}
-+	void openerService.open(URI.parse(gatewayUrl), { openExternal: true });
++
++	const input = browserViewService.getOrCreateLazy('ai-gateway', {
++		url: gatewayUrl,
++		title: 'AI Gateway',
++	});
++	if (input.url !== gatewayUrl) {
++		input.navigate(gatewayUrl);
++	}
++
++	await editorService.openEditor(input, { pinned: true, preserveFocus: false }, ACTIVE_GROUP);
 +}
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
 new file mode 100644
 index 00000000..fba382eb
 --- /dev/null
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,187 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -304,7 +310,7 @@ index 00000000..fba382eb
 +import { Disposable } from '../../../../base/common/lifecycle.js';
 +import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 +import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
-+import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
++import { ACTIVE_GROUP, IEditorService } from '../../../services/editor/common/editorService.js';
 +import { ICommandService, CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 +import { IProductService } from '../../../../platform/product/common/productService.js';
 +import { ILogService } from '../../../../platform/log/common/log.js';
@@ -317,7 +323,7 @@ index 00000000..fba382eb
 +import { AiGatewayViewPane } from './aiGatewayViewPane.js';
 +import { buildAiHubHtml } from './aiHubHtml.js';
 +import { openAiGateway } from './aiGatewayWebview.js';
-+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
++import { IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
 +import { AI_HUB_OPEN_COMMAND_ID, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService } from './aiHubTypes.js';
 +
 +const AI_HUB_VIEW_CONTAINER_ID = 'workbench.view.aiHub';
@@ -383,7 +389,8 @@ index 00000000..fba382eb
 +	const productService = accessor.get(IProductService);
 +	const logService = accessor.get(ILogService);
 +	const commandService = accessor.get(ICommandService);
-+	const openerService = accessor.get(IOpenerService);
++	const browserViewService = accessor.get(IBrowserViewWorkbenchService);
++	const editorService = accessor.get(IEditorService);
 +	const notificationService = accessor.get(INotificationService);
 +
 +	if (currentWebview && !currentWebview.isDisposed()) {
@@ -432,7 +439,7 @@ index 00000000..fba382eb
 +					break;
 +				}
 +				case 'openGateway': {
-+					openAiGateway(openerService, productService.aiGatewayUrl ?? '');
++					await openAiGateway(browserViewService, editorService, productService.aiGatewayUrl ?? '');
 +					break;
 +				}
 +				case 'openEditorSettings': {
@@ -859,22 +866,42 @@ index 048de8a0..da6026ab 100644
  	readonly fillExtraContextMenuActions: (actions: IAction[], e?: MouseEvent | GestureEvent) => void;
  	readonly colors: (theme: IColorTheme) => ICompositeBarColors;
 +	/**
-+	 * View container ids that should start out unpinned/hidden for a profile that has never
-+	 * stored a preference for them, instead of the usual "pin every newly-registered container"
-+	 * default. Has no effect once the user (or a previous session) has stored any value.
++	 * View container ids that should start out unpinned/hidden instead of the usual
++	 * "pin every newly-registered container" default. Existing profiles are migrated once,
++	 * then any later user pinning choice is respected.
 +	 */
 +	readonly defaultUnpinnedViewContainerIds?: readonly string[];
  }
  
  export class PaneCompositeBar extends Disposable {
-@@ -690,7 +696,14 @@ export class PaneCompositeBar extends Disposable {
+@@ -443,6 +449,10 @@ export class PaneCompositeBar extends Disposable {
+ 		const viewContainer = isString(viewContainerOrId) ? this.getViewContainer(viewContainerOrId) : viewContainerOrId;
+ 		const viewContainerId = isString(viewContainerOrId) ? viewContainerOrId : viewContainerOrId.id;
+ 
++		if (this.shouldUseDefaultUnpinnedState(viewContainerId, cachedViewContainer) && !this.viewService.isViewContainerActive(viewContainerId)) {
++			return true;
++		}
++
+ 		if (viewContainer) {
+ 			if (viewContainer.hideIfEmpty) {
+ 				if (this.viewService.isViewContainerActive(viewContainerId)) {
+@@ -562,7 +572,7 @@ export class PaneCompositeBar extends Disposable {
+ 						id: viewContainer.id,
+ 						name: typeof viewContainer.title === 'string' ? viewContainer.title : viewContainer.title.value,
+ 						order: viewContainer.order,
+-						pinned: true,
++						pinned: !this.isDefaultUnpinnedViewContainer(viewContainer.id),
+ 						visible: !this.shouldBeHidden(viewContainer),
+ 					});
+ 				}
+@@ -690,10 +700,80 @@ export class PaneCompositeBar extends Disposable {
  	}
  
  	private getStoredPinnedViewContainersValue(): string {
 -		return this.storageService.get(this.options.pinnedViewContainersKey, StorageScope.PROFILE, '[]');
 +		const stored = this.storageService.get(this.options.pinnedViewContainersKey, StorageScope.PROFILE);
 +		if (stored !== undefined) {
-+			return stored;
++			return this.migrateDefaultUnpinnedViewContainers(stored);
 +		}
 +		if (this.options.defaultUnpinnedViewContainerIds?.length) {
 +			return JSON.stringify(this.options.defaultUnpinnedViewContainerIds.map(id => ({ id, pinned: false, visible: false })));
@@ -883,12 +910,79 @@ index 048de8a0..da6026ab 100644
  	}
  
  	private setStoredPinnedViewContainersValue(value: string): void {
+ 		this.storageService.store(this.options.pinnedViewContainersKey, value, StorageScope.PROFILE, StorageTarget.USER);
+ 	}
++
++	private isDefaultUnpinnedViewContainer(id: string): boolean {
++		return !!this.options.defaultUnpinnedViewContainerIds?.includes(id);
++	}
++
++	private shouldUseDefaultUnpinnedState(id: string, cachedViewContainer?: ICachedViewContainer): boolean {
++		if (!this.isDefaultUnpinnedViewContainer(id)) {
++			return false;
++		}
++
++		cachedViewContainer = cachedViewContainer || this.cachedViewContainers.find(cached => cached.id === id);
++		return !cachedViewContainer || (!cachedViewContainer.pinned && !cachedViewContainer.visible);
++	}
++
++	private migrateDefaultUnpinnedViewContainers(stored: string): string {
++		const defaultUnpinnedViewContainerIds = this.options.defaultUnpinnedViewContainerIds;
++		if (!defaultUnpinnedViewContainerIds?.length) {
++			return stored;
++		}
++
++		const migrationKey = `${this.options.pinnedViewContainersKey}.defaultUnpinnedViewContainerIds`;
++		const migrationSignature = defaultUnpinnedViewContainerIds.join(',');
++		if (this.storageService.get(migrationKey, StorageScope.PROFILE) === migrationSignature) {
++			return stored;
++		}
++
++		try {
++			const defaultUnpinnedViewContainerIdSet = new Set(defaultUnpinnedViewContainerIds);
++			const pinnedViewContainers = JSON.parse(stored) as IPinnedViewContainer[];
++			const existingIds = new Set(pinnedViewContainers.map(({ id }) => id));
++			let changed = false;
++
++			const migrated = pinnedViewContainers.map(item => {
++				if (!defaultUnpinnedViewContainerIdSet.has(item.id)) {
++					return item;
++				}
++				if (!item.pinned && !item.visible) {
++					return item;
++				}
++				changed = true;
++				return { ...item, pinned: false, visible: false };
++			});
++
++			for (const id of defaultUnpinnedViewContainerIds) {
++				if (!existingIds.has(id)) {
++					migrated.push({ id, pinned: false, visible: false });
++					changed = true;
++				}
++			}
++
++			this.storageService.store(migrationKey, migrationSignature, StorageScope.PROFILE, StorageTarget.USER);
++			if (!changed) {
++				return stored;
++			}
++
++			const migratedValue = JSON.stringify(migrated);
++			this.setStoredPinnedViewContainersValue(migratedValue);
++			return migratedValue;
++		} catch {
++			this.storageService.store(migrationKey, migrationSignature, StorageScope.PROFILE, StorageTarget.USER);
++			return stored;
++		}
++	}
+ 
+ 	private getPlaceholderViewContainers(): IPlaceholderViewContainer[] {
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts
 new file mode 100644
 index 00000000..9241ca42
 --- /dev/null
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,59 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -908,11 +1002,12 @@ index 00000000..9241ca42
 +import { IProductService } from '../../../../platform/product/common/productService.js';
 +import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 +import { openAiGateway } from './aiGatewayWebview.js';
++import { IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
++import { IEditorService } from '../../../services/editor/common/editorService.js';
 +
 +/**
 + * Same "redirect, don't render" trick as AiHubViewPane: clicking this activity bar icon opens
-+ * the AI Gateway straight in the user's external browser (see aiGatewayWebview.ts for why it
-+ * can't be an embedded webview) and collapses the sidebar back down.
++ * the AI Gateway in an integrated browser editor tab and collapses the sidebar back down.
 + */
 +export class AiGatewayViewPane extends ViewPane {
 +
@@ -924,14 +1019,16 @@ index 00000000..9241ca42
 +		@IContextKeyService contextKeyService: IContextKeyService,
 +		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
 +		@IInstantiationService instantiationService: IInstantiationService,
-+		@IOpenerService private readonly openerServiceForGateway: IOpenerService,
++		@IOpenerService openerService: IOpenerService,
 +		@IThemeService themeService: IThemeService,
 +		@IHoverService hoverService: IHoverService,
 +		@IProductService private readonly productService: IProductService,
 +		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
++		@IBrowserViewWorkbenchService private readonly browserViewService: IBrowserViewWorkbenchService,
++		@IEditorService private readonly editorService: IEditorService,
 +		accessibleViewInformationService?: IAccessibleViewInformationService,
 +	) {
-+		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerServiceForGateway, themeService, hoverService, accessibleViewInformationService);
++		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService, accessibleViewInformationService);
 +	}
 +
 +	override focus(): void {
@@ -940,7 +1037,7 @@ index 00000000..9241ca42
 +	}
 +
 +	private redirectToGateway(): void {
-+		openAiGateway(this.openerServiceForGateway, this.productService.aiGatewayUrl ?? '');
++		void openAiGateway(this.browserViewService, this.editorService, this.productService.aiGatewayUrl ?? '');
 +		// Defer so we don't fight the composite bar's own reveal-sidebar handling for this click.
 +		queueMicrotask(() => this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART));
 +	}
@@ -969,15 +1066,16 @@ diff --git a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts b/src
 index fea72aba..a2bcb6b4 100644
 --- a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
 +++ b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
-@@ -166,6 +166,15 @@ export class ActivitybarPart extends Part {
+@@ -166,6 +166,16 @@ export class ActivitybarPart extends Part {
  			preventLoopNavigation: true,
  			recomputeSizes: false,
  			fillExtraContextMenuActions: (actions, e?: MouseEvent | GestureEvent) => { },
-+			// Testing has no active provider by default, and the bundled Claude/Codex extensions
-+			// are an opt-in surface via the AI Settings page -- none of these should compete for
-+			// activity bar space until the user actually turns them on / uses them.
++			// Debug/testing and bundled AI entry points are opt-in surfaces -- none of these
++			// should compete for activity bar space until the user actually turns them on / uses them.
 +			defaultUnpinnedViewContainerIds: [
++				'workbench.view.debug',
 +				'workbench.view.extension.test',
++				'workbench.view.aiHub',
 +				'workbench.view.extension.claude-sidebar',
 +				'workbench.view.extension.claude-sessions-sidebar',
 +				'workbench.view.extension.codexViewContainer',
