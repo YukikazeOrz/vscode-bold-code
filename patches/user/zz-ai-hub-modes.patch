@@ -1,0 +1,618 @@
+diff --git a/src/vs/workbench/browser/parts/globalCompositeBar.ts b/src/vs/workbench/browser/parts/globalCompositeBar.ts
+index 8b3937042c5..0c1f1941e29 100644
+--- a/src/vs/workbench/browser/parts/globalCompositeBar.ts
++++ b/src/vs/workbench/browser/parts/globalCompositeBar.ts
+@@ -4,7 +4,6 @@
+  *--------------------------------------------------------------------------------------------*/
+ 
+ import { localize } from '../../../nls.js';
+-import { AI_HUB_OPEN_COMMAND_ID } from '../../contrib/aiHub/electron-browser/aiHubTypes.js';
+ import { ActionBar, ActionsOrientation } from '../../../base/browser/ui/actionbar/actionbar.js';
+ import { ACCOUNTS_ACTIVITY_ID, GLOBAL_ACTIVITY_ID } from '../../common/activity.js';
+ import { IActivityService } from '../../services/activity/common/activity.js';
+@@ -234,7 +233,7 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
+ 		return this.contextMenuActionsProvider();
+ 	}
+ 
+-	protected async run(): Promise<void> {
++	private async run(): Promise<void> {
+ 		const disposables = new DisposableStore();
+ 		const menu = disposables.add(this.menuService.createMenu(this.menuId, this.contextKeyService));
+ 		const actions = await this.resolveMainMenuActions(menu, disposables);
+@@ -601,7 +600,6 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
+ 		@IKeybindingService keybindingService: IKeybindingService,
+ 		@IInstantiationService instantiationService: IInstantiationService,
+ 		@IActivityService activityService: IActivityService,
+-		@ICommandService private readonly commandService: ICommandService,
+ 	) {
+ 		const action = instantiationService.createInstance(CompositeBarAction, {
+ 			id: GLOBAL_ACTIVITY_ID,
+@@ -618,12 +616,6 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
+ 		}));
+ 	}
+ 
+-	// Fully replaced with AI Setting: clicking this icon opens the AI Hub page
+-	// directly instead of the "Manage" dropdown (Settings, themes, etc.).
+-	protected override async run(): Promise<void> {
+-		await this.commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
+-	}
+-
+ 	override render(container: HTMLElement): void {
+ 		super.render(container);
+ 
+@@ -719,8 +711,7 @@ export class SimpleGlobalActivityActionViewItem extends GlobalActivityActionView
+ 		@IKeybindingService keybindingService: IKeybindingService,
+ 		@IInstantiationService instantiationService: IInstantiationService,
+ 		@IActivityService activityService: IActivityService,
+-		@IStorageService storageService: IStorageService,
+-		@ICommandService commandService: ICommandService
++		@IStorageService storageService: IStorageService
+ 	) {
+ 		super(() => simpleActivityContextMenuActions(storageService, false),
+ 			{
+@@ -731,7 +722,7 @@ export class SimpleGlobalActivityActionViewItem extends GlobalActivityActionView
+ 				}),
+ 				hoverOptions,
+ 				compact: true,
+-			}, () => undefined, userDataProfileService, themeService, hoverService, menuService, contextMenuService, contextKeyService, configurationService, environmentService, keybindingService, instantiationService, activityService, commandService);
++			}, () => undefined, userDataProfileService, themeService, hoverService, menuService, contextMenuService, contextKeyService, configurationService, environmentService, keybindingService, instantiationService, activityService);
+ 	}
+ }
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+index 6687f3edcec..c550019210a 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+@@ -13,11 +13,20 @@ import { areSameExtensions } from '../../../../platform/extensionManagement/comm
+ import { EnablementState, IWorkbenchExtensionEnablementService } from '../../../services/extensionManagement/common/extensionManagement.js';
+ import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
+ import { IProductService } from '../../../../platform/product/common/productService.js';
++import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import {
+ 	CLAUDE_EXTENSION_ID, CODEX_ENV_KEY, CODEX_PROVIDER_ID, CODEX_EXTENSION_ID,
+-	IAiConfigService, IAiHubState, IAiProviderSettings
++	AiHubMode, IAiConfigService, IAiHubState, IAiProviderSettings
+ } from './aiHubTypes.js';
+ 
++const AI_HUB_MODE_STORAGE_KEY = 'aiHub.mode';
++const AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY = 'aiHub.editModeExtensionEnablement';
++
++interface IAiHubEditEnablementSnapshot {
++	readonly claudeEnabled: boolean;
++	readonly codexEnabled: boolean;
++}
++
+ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnvironmentContributor {
+ 
+ 	declare readonly _serviceBrand: undefined;
+@@ -28,6 +37,7 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
+ 		@IWorkbenchExtensionEnablementService private readonly extensionEnablementService: IWorkbenchExtensionEnablementService,
+ 		@IProductService private readonly productService: IProductService,
++		@IStorageService private readonly storageService: IStorageService,
+ 		@ILogService private readonly logService: ILogService,
+ 	) { }
+ 
+@@ -69,6 +79,41 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 		return this.extensionsWorkbenchService.local.find(e => areSameExtensions(e.identifier, { id }));
+ 	}
+ 
++	private isExtensionEnabled(id: string): boolean {
++		const extension = this.findExtension(id);
++		return !!extension?.local && this.extensionEnablementService.isEnabled(extension.local);
++	}
++
++	private getMode(): AiHubMode {
++		const mode = this.storageService.get(AI_HUB_MODE_STORAGE_KEY, StorageScope.PROFILE, 'edit');
++		return mode === 'claudeAgent' || mode === 'codexAgent' ? mode : 'edit';
++	}
++
++	private getEditEnablementSnapshot(): IAiHubEditEnablementSnapshot | undefined {
++		const raw = this.storageService.get(AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY, StorageScope.PROFILE);
++		if (!raw) {
++			return undefined;
++		}
++
++		try {
++			const parsed = JSON.parse(raw) as IAiHubEditEnablementSnapshot;
++			return {
++				claudeEnabled: !!parsed.claudeEnabled,
++				codexEnabled: !!parsed.codexEnabled,
++			};
++		} catch {
++			return undefined;
++		}
++	}
++
++	private storeCurrentEditEnablementSnapshot(): void {
++		const snapshot: IAiHubEditEnablementSnapshot = {
++			claudeEnabled: this.isExtensionEnabled(CLAUDE_EXTENSION_ID),
++			codexEnabled: this.isExtensionEnabled(CODEX_EXTENSION_ID),
++		};
++		this.storageService.store(AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY, JSON.stringify(snapshot), StorageScope.PROFILE, StorageTarget.USER);
++	}
++
+ 	async getState(): Promise<IAiHubState> {
+ 		const [claudeSettings, codexToml, codexAuth] = await Promise.all([
+ 			this.readJsonIfExists(this.claudeSettingsUri),
+@@ -90,6 +135,7 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 			codexHasApiKey: !!codexAuth?.OPENAI_API_KEY,
+ 			claudeEnabled: !!claudeExt?.local && this.extensionEnablementService.isEnabled(claudeExt.local),
+ 			codexEnabled: !!codexExt?.local && this.extensionEnablementService.isEnabled(codexExt.local),
++			mode: this.getMode(),
+ 			gatewayUrl: this.productService.aiGatewayUrl ?? '',
+ 		};
+ 	}
+@@ -103,6 +149,40 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 		await this.extensionsWorkbenchService.setEnablement(extension, enabled ? EnablementState.EnabledGlobally : EnablementState.DisabledGlobally);
+ 	}
+ 
++	async setMode(mode: AiHubMode): Promise<void> {
++		const previousMode = this.getMode();
++		if (previousMode === 'edit' && mode !== 'edit') {
++			this.storeCurrentEditEnablementSnapshot();
++		}
++
++		this.storageService.store(AI_HUB_MODE_STORAGE_KEY, mode, StorageScope.PROFILE, StorageTarget.USER);
++
++		if (mode === 'claudeAgent') {
++			await Promise.all([
++				this.setExtensionEnabled(CLAUDE_EXTENSION_ID, true),
++				this.setExtensionEnabled(CODEX_EXTENSION_ID, false),
++			]);
++			return;
++		}
++
++		if (mode === 'codexAgent') {
++			await Promise.all([
++				this.setExtensionEnabled(CLAUDE_EXTENSION_ID, false),
++				this.setExtensionEnabled(CODEX_EXTENSION_ID, true),
++			]);
++			return;
++		}
++
++		const snapshot = this.getEditEnablementSnapshot();
++		if (snapshot) {
++			await Promise.all([
++				this.setExtensionEnabled(CLAUDE_EXTENSION_ID, snapshot.claudeEnabled),
++				this.setExtensionEnabled(CODEX_EXTENSION_ID, snapshot.codexEnabled),
++			]);
++			this.storageService.remove(AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY, StorageScope.PROFILE);
++		}
++	}
++
+ 	async saveClaudeSettings(settings: IAiProviderSettings): Promise<void> {
+ 		const uri = this.claudeSettingsUri;
+ 		const json = await this.readJsonIfExists(uri);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index b15b000249d..927806d8832 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -17,6 +17,7 @@ import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js'
+ import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { ACTIVE_GROUP, IEditorService } from '../../../services/editor/common/editorService.js';
+ import { ICommandService, CommandsRegistry } from '../../../../platform/commands/common/commands.js';
++import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { INotificationService } from '../../../../platform/notification/common/notification.js';
+@@ -25,24 +26,36 @@ import { WebviewInput } from '../../webviewPanel/browser/webviewEditorInput.js';
+ import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+ import { AiConfigService } from './aiConfigService.js';
+ import { AiHubViewPane } from './aiHubViewPane.js';
+-import { AiGatewayViewPane } from './aiGatewayViewPane.js';
+ import { buildAiHubHtml } from './aiHubHtml.js';
+ import { openAiGateway } from './aiGatewayWebview.js';
+ import { IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
+-import { AI_HUB_OPEN_COMMAND_ID, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService } from './aiHubTypes.js';
++import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
++import { IViewsService } from '../../../services/views/common/viewsService.js';
++import { mainWindow } from '../../../../base/browser/window.js';
++import { AI_GATEWAY_OPEN_COMMAND_ID, AI_HUB_OPEN_COMMAND_ID, AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService } from './aiHubTypes.js';
+ 
+ const AI_HUB_VIEW_CONTAINER_ID = 'workbench.view.aiHub';
+ const AI_HUB_VIEW_ID = 'workbench.view.aiHub.launcher';
+ const AI_HUB_WEBVIEW_VIEW_TYPE = 'aiHub.settings';
+ const AI_HUB_FIRST_RUN_STORAGE_KEY = 'aiHub.firstRunHandled';
+-const AI_GATEWAY_VIEW_CONTAINER_ID = 'workbench.view.aiGateway';
+-const AI_GATEWAY_VIEW_ID = 'workbench.view.aiGateway.launcher';
++const AI_HUB_LAYOUT_STORAGE_KEY = 'aiHub.editModeLayout';
++const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar', 'claude-sidebar-secondary'];
++const CODEX_AGENT_CONTAINER_IDS = ['codexViewContainer', 'codexSecondaryViewContainer'];
++
++interface IAiHubLayoutSnapshot {
++	readonly activityBarVisible: boolean;
++	readonly sideBarVisible: boolean;
++	readonly sideBarContainerId?: string;
++	readonly auxiliaryBarVisible: boolean;
++	readonly auxiliaryBarContainerId?: string;
++	readonly panelVisible: boolean;
++	readonly editorVisible: boolean;
++}
+ 
+ registerSingleton(IAiConfigService, AiConfigService, InstantiationType.Delayed);
+ registerSingleton(IAiExtensionHostEnvironmentContributor, AiConfigService, InstantiationType.Delayed);
+ 
+ const aiHubIcon = registerIcon('ai-hub-view-icon', Codicon.chatSparkle, localize('aiHubViewIcon', "AI settings icon in the activity bar."));
+-const aiGatewayIcon = registerIcon('ai-gateway-view-icon', Codicon.globe, localize('aiGatewayViewIcon', "AI Gateway icon in the activity bar."));
+ 
+ const viewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
+ 	{
+@@ -65,39 +78,207 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
+ 	containerIcon: aiHubIcon,
+ }], viewContainer);
+ 
+-const aiGatewayViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
+-	{
+-		id: AI_GATEWAY_VIEW_CONTAINER_ID,
+-		title: localize2('aiGateway.viewContainer', "AI Gateway"),
+-		icon: aiGatewayIcon,
+-		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [AI_GATEWAY_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+-		order: 101,
++MenuRegistry.appendMenuItem(MenuId.TitleBar, {
++	command: {
++		id: AI_HUB_OPEN_COMMAND_ID,
++		title: localize2('aiHub.topBarOpenSettings', "Open AI Settings"),
++		icon: Codicon.settingsGear,
+ 	},
+-	ViewContainerLocation.Sidebar,
+-	{ doNotRegisterOpenCommand: true },
+-);
++	group: 'navigation',
++	order: -100,
++});
+ 
+-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
+-	id: AI_GATEWAY_VIEW_ID,
+-	name: localize2('aiGateway.view', "AI Gateway"),
+-	ctorDescriptor: new SyncDescriptor(AiGatewayViewPane),
+-	canToggleVisibility: false,
+-	canMoveView: false,
+-	containerIcon: aiGatewayIcon,
+-}], aiGatewayViewContainer);
++MenuRegistry.appendMenuItem(MenuId.TitleBar, {
++	command: {
++		id: AI_GATEWAY_OPEN_COMMAND_ID,
++		title: localize2('aiHub.topBarOpenGateway', "Open AI Gateway"),
++		icon: Codicon.globe,
++	},
++	group: 'navigation',
++	order: -99,
++});
++
++MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
++	command: {
++		id: AI_HUB_OPEN_COMMAND_ID,
++		title: localize2('aiHub.commandPaletteOpenSettings', "Open AI Settings"),
++	},
++});
++
++MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
++	command: {
++		id: AI_GATEWAY_OPEN_COMMAND_ID,
++		title: localize2('aiHub.commandPaletteOpenGateway', "Open AI Gateway"),
++	},
++});
+ 
+ let currentWebview: WebviewInput | undefined;
+ 
++function parseAiHubMode(value: unknown): AiHubMode {
++	return value === 'claudeAgent' || value === 'codexAgent' ? value : 'edit';
++}
++
++function getAgentContainerIds(mode: AiHubMode): readonly string[] {
++	if (mode === 'claudeAgent') {
++		return CLAUDE_AGENT_CONTAINER_IDS;
++	}
++	if (mode === 'codexAgent') {
++		return CODEX_AGENT_CONTAINER_IDS;
++	}
++	return [];
++}
++
++function captureEditLayout(layoutService: IWorkbenchLayoutService, viewsService: IViewsService): IAiHubLayoutSnapshot {
++	return {
++		activityBarVisible: layoutService.isVisible(Parts.ACTIVITYBAR_PART),
++		sideBarVisible: layoutService.isVisible(Parts.SIDEBAR_PART),
++		sideBarContainerId: viewsService.getVisibleViewContainer(ViewContainerLocation.Sidebar)?.id,
++		auxiliaryBarVisible: layoutService.isVisible(Parts.AUXILIARYBAR_PART),
++		auxiliaryBarContainerId: viewsService.getVisibleViewContainer(ViewContainerLocation.AuxiliaryBar)?.id,
++		panelVisible: layoutService.isVisible(Parts.PANEL_PART),
++		editorVisible: layoutService.isVisible(Parts.EDITOR_PART, mainWindow),
++	};
++}
++
++function readLayoutSnapshot(storageService: IStorageService): IAiHubLayoutSnapshot | undefined {
++	const raw = storageService.get(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
++	if (!raw) {
++		return undefined;
++	}
++
++	try {
++		return JSON.parse(raw) as IAiHubLayoutSnapshot;
++	} catch {
++		return undefined;
++	}
++}
++
++async function openFirstAvailableViewContainer(viewsService: IViewsService, containerIds: readonly string[]): Promise<void> {
++	for (const id of containerIds) {
++		try {
++			const paneComposite = await viewsService.openViewContainer(id, true);
++			if (paneComposite) {
++				return;
++			}
++		} catch {
++			// Some agent containers are conditional; try the next known container.
++		}
++	}
++}
++
++async function restoreEditLayout(storageService: IStorageService, layoutService: IWorkbenchLayoutService, viewsService: IViewsService): Promise<void> {
++	layoutService.setAuxiliaryBarMaximized(false);
++	const snapshot = readLayoutSnapshot(storageService);
++	if (!snapshot) {
++		layoutService.setPartHidden(false, Parts.ACTIVITYBAR_PART);
++		layoutService.setPartHidden(false, Parts.EDITOR_PART);
++		layoutService.setPartHidden(true, Parts.PANEL_PART);
++		return;
++	}
++
++	layoutService.setPartHidden(!snapshot.activityBarVisible, Parts.ACTIVITYBAR_PART);
++	layoutService.setPartHidden(!snapshot.editorVisible, Parts.EDITOR_PART);
++	layoutService.setPartHidden(!snapshot.panelVisible, Parts.PANEL_PART);
++
++	if (snapshot.sideBarVisible) {
++		layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
++		if (snapshot.sideBarContainerId) {
++			await viewsService.openViewContainer(snapshot.sideBarContainerId, false);
++		}
++	} else {
++		layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
++	}
++
++	if (snapshot.auxiliaryBarVisible) {
++		layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++		if (snapshot.auxiliaryBarContainerId) {
++			await viewsService.openViewContainer(snapshot.auxiliaryBarContainerId, false);
++		}
++	} else {
++		layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
++	}
++
++	storageService.remove(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
++}
++
++async function applyAgentLayout(mode: AiHubMode, commandService: ICommandService, layoutService: IWorkbenchLayoutService, viewsService: IViewsService, logService: ILogService): Promise<void> {
++	layoutService.setAuxiliaryBarMaximized(false);
++	layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
++	layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++	layoutService.setPartHidden(true, Parts.ACTIVITYBAR_PART);
++	layoutService.setPartHidden(true, Parts.PANEL_PART);
++	layoutService.setPartHidden(true, Parts.EDITOR_PART);
++
++	try {
++		await commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
++	} catch (err) {
++		logService.warn('[aiHub] failed to open agent sidebar via extension command', err);
++	}
++
++	await openFirstAvailableViewContainer(viewsService, getAgentContainerIds(mode));
++
++	const sideBarContainerId = viewsService.getVisibleViewContainer(ViewContainerLocation.Sidebar)?.id;
++	const auxiliaryBarContainerId = viewsService.getVisibleViewContainer(ViewContainerLocation.AuxiliaryBar)?.id;
++	const agentContainerIds = new Set(getAgentContainerIds(mode));
++
++	if (sideBarContainerId && agentContainerIds.has(sideBarContainerId)) {
++		layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
++		layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
++	} else if (auxiliaryBarContainerId && agentContainerIds.has(auxiliaryBarContainerId)) {
++		layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++		layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
++		layoutService.setAuxiliaryBarMaximized(true);
++	} else {
++		layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++		layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
++		layoutService.setAuxiliaryBarMaximized(true);
++	}
++
++	layoutService.setPartHidden(true, Parts.EDITOR_PART);
++	layoutService.setPartHidden(true, Parts.PANEL_PART);
++	layoutService.setPartHidden(true, Parts.ACTIVITYBAR_PART);
++	layoutService.layout();
++}
++
++async function applyAiHubMode(mode: AiHubMode, previousMode: AiHubMode, storageService: IStorageService, commandService: ICommandService, layoutService: IWorkbenchLayoutService, viewsService: IViewsService, logService: ILogService): Promise<void> {
++	if (mode === 'edit') {
++		if (previousMode !== 'edit' || readLayoutSnapshot(storageService)) {
++			await restoreEditLayout(storageService, layoutService, viewsService);
++		}
++		return;
++	}
++
++	if (previousMode === 'edit' && !readLayoutSnapshot(storageService)) {
++		storageService.store(AI_HUB_LAYOUT_STORAGE_KEY, JSON.stringify(captureEditLayout(layoutService, viewsService)), StorageScope.PROFILE, StorageTarget.USER);
++	}
++
++	await applyAgentLayout(mode, commandService, layoutService, viewsService, logService);
++}
++
++CommandsRegistry.registerCommand(AI_GATEWAY_OPEN_COMMAND_ID, async (accessor) => {
++	const productService = accessor.get(IProductService);
++	const browserViewService = accessor.get(IBrowserViewWorkbenchService);
++	const editorService = accessor.get(IEditorService);
++	const layoutService = accessor.get(IWorkbenchLayoutService);
++
++	layoutService.setAuxiliaryBarMaximized(false);
++	layoutService.setPartHidden(false, Parts.EDITOR_PART);
++	await openAiGateway(browserViewService, editorService, productService.aiGatewayUrl ?? '');
++});
++
+ CommandsRegistry.registerCommand(AI_HUB_OPEN_COMMAND_ID, async (accessor) => {
+ 	const webviewWorkbenchService = accessor.get(IWebviewWorkbenchService);
+ 	const aiConfigService = accessor.get(IAiConfigService);
+-	const productService = accessor.get(IProductService);
+ 	const logService = accessor.get(ILogService);
+ 	const commandService = accessor.get(ICommandService);
+-	const browserViewService = accessor.get(IBrowserViewWorkbenchService);
+-	const editorService = accessor.get(IEditorService);
++	const storageService = accessor.get(IStorageService);
++	const layoutService = accessor.get(IWorkbenchLayoutService);
++	const viewsService = accessor.get(IViewsService);
+ 	const notificationService = accessor.get(INotificationService);
+ 
++	layoutService.setAuxiliaryBarMaximized(false);
++	layoutService.setPartHidden(false, Parts.EDITOR_PART);
++
+ 	if (currentWebview && !currentWebview.isDisposed()) {
+ 		webviewWorkbenchService.revealWebview(currentWebview, ACTIVE_GROUP, false);
+ 		return;
+@@ -137,14 +318,28 @@ CommandsRegistry.registerCommand(AI_HUB_OPEN_COMMAND_ID, async (accessor) => {
+ 					const id = message.id === 'claude' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
+ 					const enabled = !!message.enabled;
+ 					await aiConfigService.setExtensionEnabled(id, enabled);
++					const refreshed = await aiConfigService.getState();
++					webview.webview.setHtml(buildAiHubHtml(refreshed));
+ 					const agentName = message.id === 'claude' ? 'Claude Code' : 'Codex';
+ 					notificationService.info(enabled
+ 						? localize('aiHub.agentConnected', "{0} 已接入", agentName)
+ 						: localize('aiHub.agentDisconnected', "{0} 已断开接入", agentName));
+ 					break;
+ 				}
++				case 'setMode': {
++					const previousMode = (await aiConfigService.getState()).mode;
++					const mode = parseAiHubMode(message.mode);
++					await aiConfigService.setMode(mode);
++					await applyAiHubMode(mode, previousMode, storageService, commandService, layoutService, viewsService, logService);
++					const refreshed = await aiConfigService.getState();
++					webview.webview.setHtml(buildAiHubHtml(refreshed));
++					notificationService.info(mode === 'edit'
++						? localize('aiHub.editModeEnabled', "已切换到编辑模式")
++						: localize('aiHub.agentModeEnabled', "已切换到 {0}", mode === 'claudeAgent' ? 'Claude Agent' : 'Codex Agent'));
++					break;
++				}
+ 				case 'openGateway': {
+-					await openAiGateway(browserViewService, editorService, productService.aiGatewayUrl ?? '');
++					await commandService.executeCommand(AI_GATEWAY_OPEN_COMMAND_ID);
+ 					break;
+ 				}
+ 				case 'openEditorSettings': {
+@@ -175,8 +370,14 @@ class AiHubFirstRunContribution extends Disposable {
+ 	constructor(
+ 		@IStorageService storageService: IStorageService,
+ 		@ICommandService commandService: ICommandService,
++		@IAiConfigService aiConfigService: IAiConfigService,
++		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
++		@IViewsService viewsService: IViewsService,
++		@ILogService logService: ILogService,
+ 	) {
+ 		super();
++		void aiConfigService.getState().then(state => applyAiHubMode(state.mode, state.mode, storageService, commandService, layoutService, viewsService, logService));
++
+ 		if (!storageService.getBoolean(AI_HUB_FIRST_RUN_STORAGE_KEY, StorageScope.APPLICATION, false)) {
+ 			storageService.store(AI_HUB_FIRST_RUN_STORAGE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+ 			void commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
+index 71d8eaf5838..895ce4b06df 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
+@@ -40,15 +40,27 @@ export function buildAiHubHtml(state: IAiHubState): string {
+ 	.switch .slider::before { content: ""; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px; background: var(--vscode-button-foreground); border-radius: 50%; transition: transform .15s; }
+ 	.switch input:checked + .slider { background: var(--vscode-button-background); }
+ 	.switch input:checked + .slider::before { transform: translateX(14px); }
++	.switch input:disabled + .slider { opacity: 0.45; cursor: default; }
+ 	.fields[data-enabled="false"] { display: none; }
++	.mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 18px; }
++	.mode-button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid var(--vscode-widget-border); min-height: 34px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++	.mode-button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
++	.agent-note { font-size: 12px; opacity: 0.72; margin: -6px 0 14px; }
+ </style>
+ </head>
+ <body>
+ 	<h1>AI Settings</h1>
+ 
+-	<h2><span>Claude Code</span><label class="switch"><input type="checkbox" id="claudeEnabled" ${state.claudeEnabled ? 'checked' : ''}><span class="slider"></span></label></h2>
++	<div class="mode-grid" role="group" aria-label="AI mode">
++		<button class="mode-button" data-mode="edit" aria-pressed="${state.mode === 'edit' ? 'true' : 'false'}">编辑模式</button>
++		<button class="mode-button" data-mode="claudeAgent" aria-pressed="${state.mode === 'claudeAgent' ? 'true' : 'false'}">Claude Agent</button>
++		<button class="mode-button" data-mode="codexAgent" aria-pressed="${state.mode === 'codexAgent' ? 'true' : 'false'}">Codex Agent</button>
++	</div>
++	<div class="agent-note">${state.mode === 'edit' ? '当前保持完整编辑器布局。' : '当前仅保留所选 Agent 对话。'}</div>
++
++	<h2><span>Claude Code</span><label class="switch"><input type="checkbox" id="claudeEnabled" ${state.claudeEnabled ? 'checked' : ''} ${state.mode === 'edit' ? '' : 'disabled'}><span class="slider"></span></label></h2>
+ 	<div class="card">
+-		<div class="fields" id="claudeFields" data-enabled="${state.claudeEnabled ? 'true' : 'false'}">
++		<div class="fields" id="claudeFields" data-enabled="${state.mode === 'claudeAgent' || (state.mode === 'edit' && state.claudeEnabled) ? 'true' : 'false'}">
+ 			<label for="claudeBaseUrl">Base URL</label>
+ 			<input type="text" id="claudeBaseUrl" placeholder="https://..." value="${escapeHtml(state.claudeBaseUrl)}">
+ 			<label for="claudeApiKey">API Key ${state.claudeHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
+@@ -57,9 +69,9 @@ export function buildAiHubHtml(state: IAiHubState): string {
+ 		</div>
+ 	</div>
+ 
+-	<h2><span>Codex</span><label class="switch"><input type="checkbox" id="codexEnabled" ${state.codexEnabled ? 'checked' : ''}><span class="slider"></span></label></h2>
++	<h2><span>Codex</span><label class="switch"><input type="checkbox" id="codexEnabled" ${state.codexEnabled ? 'checked' : ''} ${state.mode === 'edit' ? '' : 'disabled'}><span class="slider"></span></label></h2>
+ 	<div class="card">
+-		<div class="fields" id="codexFields" data-enabled="${state.codexEnabled ? 'true' : 'false'}">
++		<div class="fields" id="codexFields" data-enabled="${state.mode === 'codexAgent' || (state.mode === 'edit' && state.codexEnabled) ? 'true' : 'false'}">
+ 			<label for="codexBaseUrl">Base URL</label>
+ 			<input type="text" id="codexBaseUrl" placeholder="https://..." value="${escapeHtml(state.codexBaseUrl)}">
+ 			<label for="codexApiKey">API Key ${state.codexHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
+@@ -84,6 +96,16 @@ export function buildAiHubHtml(state: IAiHubState): string {
+ 	<script nonce="${nonce}">
+ 		const vscode = acquireVsCodeApi();
+ 		const $ = id => document.getElementById(id);
++		const currentMode = '${state.mode}';
++
++		document.querySelectorAll('[data-mode]').forEach(button => {
++			button.addEventListener('click', () => {
++				const mode = button.dataset.mode;
++				if (mode && mode !== currentMode) {
++					vscode.postMessage({ type: 'setMode', mode });
++				}
++			});
++		});
+ 
+ 		$('claudeEnabled').addEventListener('change', e => {
+ 			$('claudeFields').dataset.enabled = e.target.checked ? 'true' : 'false';
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+index f15bace0e06..ceae98acaec 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+@@ -9,11 +9,14 @@ export const CLAUDE_EXTENSION_ID = 'Anthropic.claude-code';
+ export const CODEX_EXTENSION_ID = 'openai.chatgpt';
+ 
+ export const AI_HUB_OPEN_COMMAND_ID = 'aiHub.open';
++export const AI_GATEWAY_OPEN_COMMAND_ID = 'aiGateway.open';
+ 
+ /** Env var name Codex's custom `model_providers.<id>.env_key` points at. */
+ export const CODEX_PROVIDER_ID = 'ai-hub-gateway';
+ export const CODEX_ENV_KEY = 'CODEX_AI_HUB_API_KEY';
+ 
++export type AiHubMode = 'edit' | 'claudeAgent' | 'codexAgent';
++
+ export interface IAiProviderSettings {
+ 	readonly baseUrl: string;
+ 	/** Never round-tripped back to the webview once saved; write-only from the service's perspective. */
+@@ -27,6 +30,7 @@ export interface IAiHubState {
+ 	readonly codexHasApiKey: boolean;
+ 	readonly claudeEnabled: boolean;
+ 	readonly codexEnabled: boolean;
++	readonly mode: AiHubMode;
+ 	readonly gatewayUrl: string;
+ }
+ 
+@@ -41,6 +45,13 @@ export interface IAiConfigService {
+ 	 */
+ 	getState(): Promise<IAiHubState>;
+ 
++	/**
++	 * Switches the top-level experience mode. Edit mode restores the AI extension
++	 * enablement that was active before entering an agent mode; agent modes enable
++	 * only the selected bundled agent extension.
++	 */
++	setMode(mode: AiHubMode): Promise<void>;
++
+ 	/** Writes `~/.claude/settings.json`'s `env` block, preserving unrelated existing keys. */
+ 	saveClaudeSettings(settings: IAiProviderSettings): Promise<void>;
+ 

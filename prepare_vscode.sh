@@ -230,6 +230,9 @@ resolve_universal_extension() {
 
 ZH_HANS_VERSION="1.128.0"
 resolve_universal_extension "MS-CEINTL" "vscode-language-pack-zh-hans" "${ZH_HANS_VERSION}" ".build/ai-hub-extensions/zh-hans.vsix" ZH_HANS_SHA256
+
+OPEN_REMOTE_SSH_VERSION="0.2.0"
+resolve_universal_extension "jeanp413" "open-remote-ssh" "${OPEN_REMOTE_SSH_VERSION}" ".build/ai-hub-extensions/open-remote-ssh.vsix" OPEN_REMOTE_SSH_SHA256
 # }}}
 
 jsonTmp=$( jq -s '.[0] * .[1]' product.json ../product.json )
@@ -275,8 +278,20 @@ zhHansExtJson=$( jq -n --arg version "${ZH_HANS_VERSION}" --arg sha256 "${ZH_HAN
     publisherDisplayName: "Microsoft"
   }
 }' )
-jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" --argjson claudeExt "${claudeExtJson}" --argjson codexExt "${codexExtJson}" --argjson zhHansExt "${zhHansExtJson}" \
-  '.builtInExtensions += $exts + [$claudeExt, $codexExt, $zhHansExt]' product.json )
+openRemoteSshExtJson=$( jq -n --arg version "${OPEN_REMOTE_SSH_VERSION}" --arg sha256 "${OPEN_REMOTE_SSH_SHA256}" '{
+  name: "jeanp413.open-remote-ssh",
+  version: $version,
+  sha256: $sha256,
+  repo: "https://github.com/jeanp413/open-remote-ssh",
+  vsix: ".build/ai-hub-extensions/open-remote-ssh.vsix",
+  metadata: {
+    id: "9fc16cea-08a5-41ab-b499-801c0be12ab3",
+    publisherId: { publisherId: "82e59f8d-e645-42f6-8b18-25ea83942fb8", publisherName: "jeanp413", displayName: "jeanp413", flags: "none" },
+    publisherDisplayName: "jeanp413"
+  }
+}' )
+jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" --argjson claudeExt "${claudeExtJson}" --argjson codexExt "${codexExtJson}" --argjson zhHansExt "${zhHansExtJson}" --argjson openRemoteSshExt "${openRemoteSshExtJson}" \
+  '.builtInExtensions += $exts + [$claudeExt, $codexExt, $zhHansExt, $openRemoteSshExt]' product.json )
 echo "${jsonTmp}" > product.json && unset jsonTmp
 
 cat product.json
