@@ -135,6 +135,43 @@ echo "${jsonTmp}" > product.json && unset jsonTmp
 cat product.json
 # }}}
 
+# {{{ download bundled AI extensions
+# VSCodium's 00-build-download-extensions-from-gh.patch removes marketplace fetching from
+# builtInExtensions entirely, so each entry needs either a local vsix or a real GitHub release
+# asset. Neither Anthropic.claude-code nor openai.chatgpt publish a vsix via GitHub Releases
+# (only via Open VSX), so fetch them here into a local path and reference that via `vsix`.
+mkdir -p .build/ai-hub-extensions
+
+download_ai_extension() {
+  local publisher="$1" name="$2" version="$3" sha256="$4" dest="$5"
+
+  for i in {1..5}; do
+    if curl --silent --fail --location \
+      "https://open-vsx.org/vscode/gallery/publishers/${publisher}/vsextensions/${name}/${version}/vspackage" \
+      -o "${dest}"; then
+      break
+    fi
+
+    if [[ $i == 5 ]]; then
+      echo "Failed to download ${publisher}.${name}@${version} after 5 attempts" >&2
+      exit 1
+    fi
+    echo "Download of ${publisher}.${name}@${version} failed, attempt $i, retrying..."
+    sleep $(( 10 * (i + 1) ))
+  done
+
+  local actual
+  actual=$( shasum -a 256 "${dest}" | cut -d' ' -f1 )
+  if [[ "${actual}" != "${sha256}" ]]; then
+    echo "Checksum mismatch for ${publisher}.${name}@${version}: expected ${sha256}, got ${actual}" >&2
+    exit 1
+  fi
+}
+
+download_ai_extension "anthropic" "claude-code" "2.1.89" "f46012808ee27e1c408f82fa5dfd4c1b21ac885702e4d65bd880828cb51fe50c" ".build/ai-hub-extensions/claude-code.vsix"
+download_ai_extension "openai" "chatgpt" "0.5.78" "f78998b8d9ba220201da33aec8672a9e651bd606ea3bcdd396482f0a83f1dcac" ".build/ai-hub-extensions/codex.vsix"
+# }}}
+
 # include common functions
 . ../utils.sh
 
