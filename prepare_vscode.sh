@@ -123,18 +123,6 @@ fi
 
 setpath_json "product" "tunnelApplicationConfig" '{}'
 
-jsonTmp=$( jq -s '.[0] * .[1]' product.json ../product.json )
-echo "${jsonTmp}" > product.json && unset jsonTmp
-
-# jq's deep-merge (`*`) replaces arrays wholesale rather than concatenating them, so
-# builtInExtensions can't live in ../product.json without wiping upstream's own entries
-# (e.g. ms-vscode.js-debug-companion). Append our AI extensions here instead.
-jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" '.builtInExtensions += $exts' product.json )
-echo "${jsonTmp}" > product.json && unset jsonTmp
-
-cat product.json
-# }}}
-
 # {{{ download bundled AI extensions
 # VSCodium's 00-build-download-extensions-from-gh.patch removes marketplace fetching from
 # builtInExtensions entirely, so each entry needs either a local vsix or a real GitHub release
@@ -170,7 +158,80 @@ download_ai_extension() {
 }
 
 download_ai_extension "anthropic" "claude-code" "2.1.89" "f46012808ee27e1c408f82fa5dfd4c1b21ac885702e4d65bd880828cb51fe50c" ".build/ai-hub-extensions/claude-code.vsix"
-download_ai_extension "openai" "chatgpt" "0.5.78" "f78998b8d9ba220201da33aec8672a9e651bd606ea3bcdd396482f0a83f1dcac" ".build/ai-hub-extensions/codex.vsix"
+
+# openai.chatgpt has no true stable channel (every published version is prerelease-flagged) and,
+# as of the version pinned below, ships a separate vsix per target platform rather than one
+# universal build — so unlike claude-code above, its checksum can't be a single hardcoded value.
+# Fetch the platform-specific vsix and Open VSX's own published .sha256 for it instead.
+CODEX_VERSION="26.5623.141536"
+case "${OS_NAME}-${VSCODE_ARCH}" in
+  osx-arm64) CODEX_TARGET="darwin-arm64" ;;
+  osx-x64) CODEX_TARGET="darwin-x64" ;;
+  windows-x64) CODEX_TARGET="win32-x64" ;;
+  windows-arm64) CODEX_TARGET="win32-arm64" ;;
+  linux-x64) CODEX_TARGET="linux-x64" ;;
+  linux-arm64) CODEX_TARGET="linux-arm64" ;;
+  *) echo "No known openai.chatgpt Open VSX build for platform ${OS_NAME}-${VSCODE_ARCH}" >&2; exit 1 ;;
+esac
+
+download_ai_extension_dynamic_checksum() {
+  local publisher="$1" name="$2" version="$3" target="$4" dest="$5"
+  local fileBase="${publisher}.${name}-${version}@${target}"
+  local base="https://open-vsx.org/api/${publisher}/${name}/${target}/${version}/file/${fileBase}"
+
+  for i in {1..5}; do
+    if curl --silent --fail --location "${base}.vsix" -o "${dest}"; then
+      break
+    fi
+
+    if [[ $i == 5 ]]; then
+      echo "Failed to download ${publisher}.${name}@${version} (${target}) after 5 attempts" >&2
+      exit 1
+    fi
+    echo "Download of ${publisher}.${name}@${version} (${target}) failed, attempt $i, retrying..."
+    sleep $(( 10 * (i + 1) ))
+  done
+
+  local expected actual
+  expected=$( curl --silent --fail --location "${base}.sha256" )
+  if [[ -z "${expected}" ]]; then
+    echo "Could not fetch published checksum for ${publisher}.${name}@${version} (${target})" >&2
+    exit 1
+  fi
+  actual=$( node -e "const c=require('crypto').createHash('sha256'); require('fs').createReadStream(process.argv[1]).on('data',d=>c.update(d)).on('end',()=>console.log(c.digest('hex')))" "${dest}" )
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Checksum mismatch for ${publisher}.${name}@${version} (${target}): expected ${expected}, got ${actual}" >&2
+    exit 1
+  fi
+  CODEX_SHA256="${actual}"
+}
+
+download_ai_extension_dynamic_checksum "openai" "chatgpt" "${CODEX_VERSION}" "${CODEX_TARGET}" ".build/ai-hub-extensions/codex.vsix"
+# }}}
+
+jsonTmp=$( jq -s '.[0] * .[1]' product.json ../product.json )
+echo "${jsonTmp}" > product.json && unset jsonTmp
+
+# jq's deep-merge (`*`) replaces arrays wholesale rather than concatenating them, so
+# builtInExtensions can't live in ../product.json without wiping upstream's own entries
+# (e.g. ms-vscode.js-debug-companion). Append our AI extensions here instead.
+codexExtJson=$( jq -n --arg version "${CODEX_VERSION}" --arg sha256 "${CODEX_SHA256}" '{
+  name: "openai.chatgpt",
+  version: $version,
+  sha256: $sha256,
+  repo: "https://github.com/openai/codex",
+  vsix: ".build/ai-hub-extensions/codex.vsix",
+  metadata: {
+    id: "7bf0412a-41da-431c-bc29-5b548b414efc",
+    publisherId: { publisherId: "openai", publisherName: "openai", displayName: "OpenAI", flags: "none" },
+    publisherDisplayName: "OpenAI"
+  }
+}' )
+jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" --argjson codexExt "${codexExtJson}" \
+  '.builtInExtensions += $exts + [$codexExt]' product.json )
+echo "${jsonTmp}" > product.json && unset jsonTmp
+
+cat product.json
 # }}}
 
 # include common functions
