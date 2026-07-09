@@ -1,0 +1,1 @@
+ai-hub-extensions/*.vsix filter=lfs diff=lfs merge=lfs -text
