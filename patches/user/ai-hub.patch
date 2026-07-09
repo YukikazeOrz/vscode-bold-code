@@ -256,54 +256,37 @@ index 00000000..6687f3ed
 +}
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts
 new file mode 100644
-index 00000000..bfa87a74
+index 00000000..36739528
 --- /dev/null
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,21 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
 + *--------------------------------------------------------------------------------------------*/
 +
-+import { localize } from '../../../../nls.js';
-+import { IWebviewWorkbenchService } from '../../webviewPanel/browser/webviewWorkbenchService.js';
-+
-+export const AI_GATEWAY_WEBVIEW_VIEW_TYPE = 'aiHub.gateway';
++import { URI } from '../../../../base/common/uri.js';
++import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 +
 +/**
-+ * Opens the AI gateway login/key-management page as an editor-area tab, the same way the
-+ * built-in Simple Browser extension opens external URLs: a cross-origin <iframe> inside our
-+ * own sandboxed webview page. That sandboxing is exactly why this can only show the page, not
-+ * script it — a same-origin-policy boundary Electron's <webview> tag can bypass but the
-+ * standard VS Code webview abstraction deliberately does not expose (see aiHub.contribution.ts
-+ * for why importing a key from here still requires manual copy/paste for now).
++ * Opens the AI gateway login/key-management page in the user's default external browser.
++ * This can't be an embedded webview iframe: the gateway sends `X-Frame-Options: DENY` and a
++ * `frame-ancestors 'none'` CSP, which refuses embedding in any iframe regardless of sandboxing
++ * on our side. Importing a key from here still requires manual copy/paste (see
++ * aiHub.contribution.ts) since an external browser tab can't postMessage back into the editor.
 + */
-+export function openAiGatewayWebview(webviewWorkbenchService: IWebviewWorkbenchService, gatewayUrl: string): void {
-+	const webview = webviewWorkbenchService.openWebview(
-+		{
-+			title: localize('aiHub.gateway.title', "AI Gateway"),
-+			options: { retainContextWhenHidden: true },
-+			contentOptions: { allowScripts: true },
-+			extension: undefined,
-+		},
-+		AI_GATEWAY_WEBVIEW_VIEW_TYPE,
-+		localize('aiHub.gateway.title', "AI Gateway"),
-+		undefined,
-+		{ preserveFocus: false },
-+	);
-+
-+	webview.webview.setHtml(`<!DOCTYPE html>
-+<html>
-+<head><meta charset="UTF-8"><style>html,body,iframe{margin:0;padding:0;width:100%;height:100%;border:none;}</style></head>
-+<body><iframe src="${gatewayUrl}" sandbox="allow-scripts allow-forms allow-same-origin allow-popups"></iframe></body>
-+</html>`);
++export function openAiGateway(openerService: IOpenerService, gatewayUrl: string): void {
++	if (!gatewayUrl) {
++		return;
++	}
++	void openerService.open(URI.parse(gatewayUrl), { openExternal: true });
 +}
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
 new file mode 100644
-index 00000000..c004cf01
+index 00000000..fba382eb
 --- /dev/null
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,186 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -325,24 +308,30 @@ index 00000000..c004cf01
 +import { ICommandService, CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 +import { IProductService } from '../../../../platform/product/common/productService.js';
 +import { ILogService } from '../../../../platform/log/common/log.js';
++import { INotificationService } from '../../../../platform/notification/common/notification.js';
 +import { IWebviewWorkbenchService } from '../../webviewPanel/browser/webviewWorkbenchService.js';
 +import { WebviewInput } from '../../webviewPanel/browser/webviewEditorInput.js';
 +import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
 +import { AiConfigService } from './aiConfigService.js';
 +import { AiHubViewPane } from './aiHubViewPane.js';
++import { AiGatewayViewPane } from './aiGatewayViewPane.js';
 +import { buildAiHubHtml } from './aiHubHtml.js';
-+import { openAiGatewayWebview } from './aiGatewayWebview.js';
++import { openAiGateway } from './aiGatewayWebview.js';
++import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 +import { AI_HUB_OPEN_COMMAND_ID, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService } from './aiHubTypes.js';
 +
 +const AI_HUB_VIEW_CONTAINER_ID = 'workbench.view.aiHub';
 +const AI_HUB_VIEW_ID = 'workbench.view.aiHub.launcher';
 +const AI_HUB_WEBVIEW_VIEW_TYPE = 'aiHub.settings';
 +const AI_HUB_FIRST_RUN_STORAGE_KEY = 'aiHub.firstRunHandled';
++const AI_GATEWAY_VIEW_CONTAINER_ID = 'workbench.view.aiGateway';
++const AI_GATEWAY_VIEW_ID = 'workbench.view.aiGateway.launcher';
 +
 +registerSingleton(IAiConfigService, AiConfigService, InstantiationType.Delayed);
 +registerSingleton(IAiExtensionHostEnvironmentContributor, AiConfigService, InstantiationType.Delayed);
 +
 +const aiHubIcon = registerIcon('ai-hub-view-icon', Codicon.chatSparkle, localize('aiHubViewIcon', "AI settings icon in the activity bar."));
++const aiGatewayIcon = registerIcon('ai-gateway-view-icon', Codicon.globe, localize('aiGatewayViewIcon', "AI Gateway icon in the activity bar."));
 +
 +const viewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
 +	{
@@ -365,6 +354,27 @@ index 00000000..c004cf01
 +	containerIcon: aiHubIcon,
 +}], viewContainer);
 +
++const aiGatewayViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
++	{
++		id: AI_GATEWAY_VIEW_CONTAINER_ID,
++		title: localize2('aiGateway.viewContainer', "AI Gateway"),
++		icon: aiGatewayIcon,
++		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [AI_GATEWAY_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
++		order: 101,
++	},
++	ViewContainerLocation.Sidebar,
++	{ doNotRegisterOpenCommand: true },
++);
++
++Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
++	id: AI_GATEWAY_VIEW_ID,
++	name: localize2('aiGateway.view', "AI Gateway"),
++	ctorDescriptor: new SyncDescriptor(AiGatewayViewPane),
++	canToggleVisibility: false,
++	canMoveView: false,
++	containerIcon: aiGatewayIcon,
++}], aiGatewayViewContainer);
++
 +let currentWebview: WebviewInput | undefined;
 +
 +CommandsRegistry.registerCommand(AI_HUB_OPEN_COMMAND_ID, async (accessor) => {
@@ -372,6 +382,9 @@ index 00000000..c004cf01
 +	const aiConfigService = accessor.get(IAiConfigService);
 +	const productService = accessor.get(IProductService);
 +	const logService = accessor.get(ILogService);
++	const commandService = accessor.get(ICommandService);
++	const openerService = accessor.get(IOpenerService);
++	const notificationService = accessor.get(INotificationService);
 +
 +	if (currentWebview && !currentWebview.isDisposed()) {
 +		webviewWorkbenchService.revealWebview(currentWebview, ACTIVE_GROUP, false);
@@ -410,11 +423,20 @@ index 00000000..c004cf01
 +				}
 +				case 'toggleExtension': {
 +					const id = message.id === 'claude' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
-+					await aiConfigService.setExtensionEnabled(id, !!message.enabled);
++					const enabled = !!message.enabled;
++					await aiConfigService.setExtensionEnabled(id, enabled);
++					const agentName = message.id === 'claude' ? 'Claude Code' : 'Codex';
++					notificationService.info(enabled
++						? localize('aiHub.agentConnected', "{0} 已接入", agentName)
++						: localize('aiHub.agentDisconnected', "{0} 已断开接入", agentName));
 +					break;
 +				}
 +				case 'openGateway': {
-+					openAiGatewayWebview(webviewWorkbenchService, productService.aiGatewayUrl ?? '');
++					openAiGateway(openerService, productService.aiGatewayUrl ?? '');
++					break;
++				}
++				case 'openEditorSettings': {
++					await commandService.executeCommand('workbench.action.openSettings');
 +					break;
 +				}
 +			}
@@ -453,10 +475,10 @@ index 00000000..c004cf01
 +Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(AiHubFirstRunContribution, LifecyclePhase.Restored);
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
 new file mode 100644
-index 00000000..c6d50110
+index 00000000..71d8eaf5
 --- /dev/null
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,119 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -483,7 +505,7 @@ index 00000000..c6d50110
 +<style>
 +	body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 0 32px 32px; max-width: 720px; }
 +	h1 { font-size: 22px; font-weight: 600; margin-top: 32px; }
-+	h2 { font-size: 15px; font-weight: 600; margin-top: 36px; border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 8px; }
++	h2 { font-size: 15px; font-weight: 600; margin-top: 36px; border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
 +	.card { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border); border-radius: 6px; padding: 16px; margin: 12px 0; }
 +	.row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
 +	label { display: block; font-size: 12px; opacity: 0.85; margin-bottom: 4px; }
@@ -491,39 +513,41 @@ index 00000000..c6d50110
 +	button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; padding: 6px 14px; cursor: pointer; }
 +	button:hover { background: var(--vscode-button-hoverBackground); }
 +	button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-+	.toggle-label { font-size: 13px; }
 +	.hint { font-size: 11px; opacity: 0.7; margin-top: -6px; margin-bottom: 10px; }
 +	.status { font-size: 12px; margin-left: 8px; opacity: 0.8; }
++	.switch { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; }
++	.switch input { opacity: 0; width: 0; height: 0; }
++	.switch .slider { position: absolute; inset: 0; cursor: pointer; background: var(--vscode-input-border); border-radius: 999px; transition: background .15s; }
++	.switch .slider::before { content: ""; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px; background: var(--vscode-button-foreground); border-radius: 50%; transition: transform .15s; }
++	.switch input:checked + .slider { background: var(--vscode-button-background); }
++	.switch input:checked + .slider::before { transform: translateX(14px); }
++	.fields[data-enabled="false"] { display: none; }
 +</style>
 +</head>
 +<body>
 +	<h1>AI Settings</h1>
 +
-+	<h2>Claude Code</h2>
++	<h2><span>Claude Code</span><label class="switch"><input type="checkbox" id="claudeEnabled" ${state.claudeEnabled ? 'checked' : ''}><span class="slider"></span></label></h2>
 +	<div class="card">
-+		<div class="row">
-+			<span class="toggle-label">Enable Claude Code extension</span>
-+			<input type="checkbox" id="claudeEnabled" ${state.claudeEnabled ? 'checked' : ''}>
++		<div class="fields" id="claudeFields" data-enabled="${state.claudeEnabled ? 'true' : 'false'}">
++			<label for="claudeBaseUrl">Base URL</label>
++			<input type="text" id="claudeBaseUrl" placeholder="https://..." value="${escapeHtml(state.claudeBaseUrl)}">
++			<label for="claudeApiKey">API Key ${state.claudeHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
++			<input type="password" id="claudeApiKey" placeholder="${state.claudeHasApiKey ? '••••••••' : 'sk-...'}">
++			<button id="saveClaude">Save</button>
 +		</div>
-+		<label for="claudeBaseUrl">Base URL</label>
-+		<input type="text" id="claudeBaseUrl" placeholder="https://..." value="${escapeHtml(state.claudeBaseUrl)}">
-+		<label for="claudeApiKey">API Key ${state.claudeHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
-+		<input type="password" id="claudeApiKey" placeholder="${state.claudeHasApiKey ? '••••••••' : 'sk-...'}">
-+		<button id="saveClaude">Save</button>
 +	</div>
 +
-+	<h2>Codex</h2>
++	<h2><span>Codex</span><label class="switch"><input type="checkbox" id="codexEnabled" ${state.codexEnabled ? 'checked' : ''}><span class="slider"></span></label></h2>
 +	<div class="card">
-+		<div class="row">
-+			<span class="toggle-label">Enable Codex extension</span>
-+			<input type="checkbox" id="codexEnabled" ${state.codexEnabled ? 'checked' : ''}>
++		<div class="fields" id="codexFields" data-enabled="${state.codexEnabled ? 'true' : 'false'}">
++			<label for="codexBaseUrl">Base URL</label>
++			<input type="text" id="codexBaseUrl" placeholder="https://..." value="${escapeHtml(state.codexBaseUrl)}">
++			<label for="codexApiKey">API Key ${state.codexHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
++			<input type="password" id="codexApiKey" placeholder="${state.codexHasApiKey ? '••••••••' : 'sk-...'}">
++			<div class="hint">Codex reads this key at extension-host startup; changing it takes effect after reloading the window.</div>
++			<button id="saveCodex">Save</button>
 +		</div>
-+		<label for="codexBaseUrl">Base URL</label>
-+		<input type="text" id="codexBaseUrl" placeholder="https://..." value="${escapeHtml(state.codexBaseUrl)}">
-+		<label for="codexApiKey">API Key ${state.codexHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
-+		<input type="password" id="codexApiKey" placeholder="${state.codexHasApiKey ? '••••••••' : 'sk-...'}">
-+		<div class="hint">Codex reads this key at extension-host startup; changing it takes effect after reloading the window.</div>
-+		<button id="saveCodex">Save</button>
 +	</div>
 +
 +	<h2>AI Gateway</h2>
@@ -532,12 +556,24 @@ index 00000000..c6d50110
 +		<button id="openGateway" class="secondary">Open ${escapeHtml(state.gatewayUrl || 'AI Gateway')}</button>
 +	</div>
 +
++	<h2>编辑器设置</h2>
++	<div class="card">
++		<p style="margin-top:0">打开原始的 VS Code 编辑器设置界面。</p>
++		<button id="openEditorSettings" class="secondary">打开编辑器设置</button>
++	</div>
++
 +	<script nonce="${nonce}">
 +		const vscode = acquireVsCodeApi();
 +		const $ = id => document.getElementById(id);
 +
-+		$('claudeEnabled').addEventListener('change', e => vscode.postMessage({ type: 'toggleExtension', id: 'claude', enabled: e.target.checked }));
-+		$('codexEnabled').addEventListener('change', e => vscode.postMessage({ type: 'toggleExtension', id: 'codex', enabled: e.target.checked }));
++		$('claudeEnabled').addEventListener('change', e => {
++			$('claudeFields').dataset.enabled = e.target.checked ? 'true' : 'false';
++			vscode.postMessage({ type: 'toggleExtension', id: 'claude', enabled: e.target.checked });
++		});
++		$('codexEnabled').addEventListener('change', e => {
++			$('codexFields').dataset.enabled = e.target.checked ? 'true' : 'false';
++			vscode.postMessage({ type: 'toggleExtension', id: 'codex', enabled: e.target.checked });
++		});
 +
 +		$('saveClaude').addEventListener('click', () => vscode.postMessage({
 +			type: 'save', provider: 'claude',
@@ -548,6 +584,7 @@ index 00000000..c6d50110
 +			baseUrl: $('codexBaseUrl').value, apiKey: $('codexApiKey').value
 +		}));
 +		$('openGateway').addEventListener('click', () => vscode.postMessage({ type: 'openGateway' }));
++		$('openEditorSettings').addEventListener('click', () => vscode.postMessage({ type: 'openEditorSettings' }));
 +
 +		window.addEventListener('message', event => {
 +			const message = event.data;
@@ -741,3 +778,210 @@ index 2fc6c8a3..131ca898 100644
  // Performance
  import './contrib/performance/electron-browser/performance.contribution.js';
  
+diff --git a/src/vs/workbench/browser/parts/globalCompositeBar.ts b/src/vs/workbench/browser/parts/globalCompositeBar.ts
+index 48220d63..8b393704 100644
+--- a/src/vs/workbench/browser/parts/globalCompositeBar.ts
++++ b/src/vs/workbench/browser/parts/globalCompositeBar.ts
+@@ -4,6 +4,7 @@
+  *--------------------------------------------------------------------------------------------*/
+ 
+ import { localize } from '../../../nls.js';
++import { AI_HUB_OPEN_COMMAND_ID } from '../../contrib/aiHub/electron-browser/aiHubTypes.js';
+ import { ActionBar, ActionsOrientation } from '../../../base/browser/ui/actionbar/actionbar.js';
+ import { ACCOUNTS_ACTIVITY_ID, GLOBAL_ACTIVITY_ID } from '../../common/activity.js';
+ import { IActivityService } from '../../services/activity/common/activity.js';
+@@ -233,7 +234,7 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
+ 		return this.contextMenuActionsProvider();
+ 	}
+ 
+-	private async run(): Promise<void> {
++	protected async run(): Promise<void> {
+ 		const disposables = new DisposableStore();
+ 		const menu = disposables.add(this.menuService.createMenu(this.menuId, this.contextKeyService));
+ 		const actions = await this.resolveMainMenuActions(menu, disposables);
+@@ -600,6 +601,7 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
+ 		@IKeybindingService keybindingService: IKeybindingService,
+ 		@IInstantiationService instantiationService: IInstantiationService,
+ 		@IActivityService activityService: IActivityService,
++		@ICommandService private readonly commandService: ICommandService,
+ 	) {
+ 		const action = instantiationService.createInstance(CompositeBarAction, {
+ 			id: GLOBAL_ACTIVITY_ID,
+@@ -616,6 +618,12 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
+ 		}));
+ 	}
+ 
++	// Fully replaced with AI Setting: clicking this icon opens the AI Hub page
++	// directly instead of the "Manage" dropdown (Settings, themes, etc.).
++	protected override async run(): Promise<void> {
++		await this.commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
++	}
++
+ 	override render(container: HTMLElement): void {
+ 		super.render(container);
+ 
+@@ -711,7 +719,8 @@ export class SimpleGlobalActivityActionViewItem extends GlobalActivityActionView
+ 		@IKeybindingService keybindingService: IKeybindingService,
+ 		@IInstantiationService instantiationService: IInstantiationService,
+ 		@IActivityService activityService: IActivityService,
+-		@IStorageService storageService: IStorageService
++		@IStorageService storageService: IStorageService,
++		@ICommandService commandService: ICommandService
+ 	) {
+ 		super(() => simpleActivityContextMenuActions(storageService, false),
+ 			{
+@@ -722,7 +731,7 @@ export class SimpleGlobalActivityActionViewItem extends GlobalActivityActionView
+ 				}),
+ 				hoverOptions,
+ 				compact: true,
+-			}, () => undefined, userDataProfileService, themeService, hoverService, menuService, contextMenuService, contextKeyService, configurationService, environmentService, keybindingService, instantiationService, activityService);
++			}, () => undefined, userDataProfileService, themeService, hoverService, menuService, contextMenuService, contextKeyService, configurationService, environmentService, keybindingService, instantiationService, activityService, commandService);
+ 	}
+ }
+ 
+@@ -742,7 +751,9 @@ function simpleActivityContextMenuActions(storageService: IStorageService, isAcc
+ }
+ 
+ export function isAccountsActionVisible(storageService: IStorageService): boolean {
+-	return storageService.getBoolean(AccountsActivityActionViewItem.ACCOUNTS_VISIBILITY_PREFERENCE_KEY, StorageScope.PROFILE, true);
++	// Defaults to hidden -- the user can re-enable it via the "Accounts" toggle on the
++	// Manage icon's context menu.
++	return storageService.getBoolean(AccountsActivityActionViewItem.ACCOUNTS_VISIBILITY_PREFERENCE_KEY, StorageScope.PROFILE, false);
+ }
+ 
+ function setAccountsActionVisible(storageService: IStorageService, visible: boolean) {
+diff --git a/src/vs/workbench/browser/parts/paneCompositeBar.ts b/src/vs/workbench/browser/parts/paneCompositeBar.ts
+index 048de8a0..da6026ab 100644
+--- a/src/vs/workbench/browser/parts/paneCompositeBar.ts
++++ b/src/vs/workbench/browser/parts/paneCompositeBar.ts
+@@ -83,6 +83,12 @@ export interface IPaneCompositeBarOptions {
+ 	readonly activityHoverOptions: IActivityHoverOptions;
+ 	readonly fillExtraContextMenuActions: (actions: IAction[], e?: MouseEvent | GestureEvent) => void;
+ 	readonly colors: (theme: IColorTheme) => ICompositeBarColors;
++	/**
++	 * View container ids that should start out unpinned/hidden for a profile that has never
++	 * stored a preference for them, instead of the usual "pin every newly-registered container"
++	 * default. Has no effect once the user (or a previous session) has stored any value.
++	 */
++	readonly defaultUnpinnedViewContainerIds?: readonly string[];
+ }
+ 
+ export class PaneCompositeBar extends Disposable {
+@@ -690,7 +696,14 @@ export class PaneCompositeBar extends Disposable {
+ 	}
+ 
+ 	private getStoredPinnedViewContainersValue(): string {
+-		return this.storageService.get(this.options.pinnedViewContainersKey, StorageScope.PROFILE, '[]');
++		const stored = this.storageService.get(this.options.pinnedViewContainersKey, StorageScope.PROFILE);
++		if (stored !== undefined) {
++			return stored;
++		}
++		if (this.options.defaultUnpinnedViewContainerIds?.length) {
++			return JSON.stringify(this.options.defaultUnpinnedViewContainerIds.map(id => ({ id, pinned: false, visible: false })));
++		}
++		return '[]';
+ 	}
+ 
+ 	private setStoredPinnedViewContainersValue(value: string): void {
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts
+new file mode 100644
+index 00000000..9241ca42
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts
+@@ -0,0 +1,56 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { ViewPane, IViewPaneOptions } from '../../../browser/parts/views/viewPane.js';
++import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
++import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
++import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
++import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
++import { IViewDescriptorService } from '../../../common/views.js';
++import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
++import { IOpenerService } from '../../../../platform/opener/common/opener.js';
++import { IThemeService } from '../../../../platform/theme/common/themeService.js';
++import { IHoverService } from '../../../../platform/hover/browser/hover.js';
++import { IAccessibleViewInformationService } from '../../../services/accessibility/common/accessibleViewInformationService.js';
++import { IProductService } from '../../../../platform/product/common/productService.js';
++import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
++import { openAiGateway } from './aiGatewayWebview.js';
++
++/**
++ * Same "redirect, don't render" trick as AiHubViewPane: clicking this activity bar icon opens
++ * the AI Gateway straight in the user's external browser (see aiGatewayWebview.ts for why it
++ * can't be an embedded webview) and collapses the sidebar back down.
++ */
++export class AiGatewayViewPane extends ViewPane {
++
++	constructor(
++		options: IViewPaneOptions,
++		@IKeybindingService keybindingService: IKeybindingService,
++		@IContextMenuService contextMenuService: IContextMenuService,
++		@IConfigurationService configurationService: IConfigurationService,
++		@IContextKeyService contextKeyService: IContextKeyService,
++		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
++		@IInstantiationService instantiationService: IInstantiationService,
++		@IOpenerService private readonly openerServiceForGateway: IOpenerService,
++		@IThemeService themeService: IThemeService,
++		@IHoverService hoverService: IHoverService,
++		@IProductService private readonly productService: IProductService,
++		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
++		accessibleViewInformationService?: IAccessibleViewInformationService,
++	) {
++		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerServiceForGateway, themeService, hoverService, accessibleViewInformationService);
++	}
++
++	override focus(): void {
++		super.focus();
++		this.redirectToGateway();
++	}
++
++	private redirectToGateway(): void {
++		openAiGateway(this.openerServiceForGateway, this.productService.aiGatewayUrl ?? '');
++		// Defer so we don't fight the composite bar's own reveal-sidebar handling for this click.
++		queueMicrotask(() => this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART));
++	}
++}
+diff --git a/src/main.ts b/src/main.ts
+index 9e46f57c..83b21703 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -747,7 +747,14 @@ function getUserDefinedLocale(argvConfig: IArgvConfig): string | undefined {
+ 		return locale.toLowerCase(); // a directly provided --locale always wins
+ 	}
+ 
+-	return typeof argvConfig?.locale === 'string' ? argvConfig.locale.toLowerCase() : undefined;
++	if (typeof argvConfig?.locale === 'string') {
++		return argvConfig.locale.toLowerCase();
++	}
++
++	// Default to Chinese (Simplified) when nothing else is configured, since the
++	// language pack ships bundled. Users can still override via Configure Display
++	// Language or by setting "locale" in argv.json.
++	return 'zh-cn';
+ }
+ 
+ //#endregion
+diff --git a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
+index fea72aba..a2bcb6b4 100644
+--- a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
++++ b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
+@@ -166,6 +166,15 @@ export class ActivitybarPart extends Part {
+ 			preventLoopNavigation: true,
+ 			recomputeSizes: false,
+ 			fillExtraContextMenuActions: (actions, e?: MouseEvent | GestureEvent) => { },
++			// Testing has no active provider by default, and the bundled Claude/Codex extensions
++			// are an opt-in surface via the AI Settings page -- none of these should compete for
++			// activity bar space until the user actually turns them on / uses them.
++			defaultUnpinnedViewContainerIds: [
++				'workbench.view.extension.test',
++				'workbench.view.extension.claude-sidebar',
++				'workbench.view.extension.claude-sessions-sidebar',
++				'workbench.view.extension.codexViewContainer',
++			],
+ 			compositeSize: 52,
+ 			colors: (theme: IColorTheme) => ({
+ 				activeForegroundColor: theme.getColor(ACTIVITY_BAR_FOREGROUND),

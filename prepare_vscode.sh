@@ -198,6 +198,38 @@ case "${OS_NAME}-${VSCODE_ARCH}" in
   *) echo "No known openai.chatgpt Open VSX build for platform ${OS_NAME}-${VSCODE_ARCH}" >&2; exit 1 ;;
 esac
 resolve_ai_extension "openai" "chatgpt" "${CODEX_VERSION}" "${CODEX_TARGET}" ".build/ai-hub-extensions/codex.vsix" CODEX_SHA256
+
+# Chinese (Simplified) language pack -- unlike claude-code/codex this ships one
+# universal vsix for every platform, so no per-target resolution is needed.
+resolve_universal_extension() {
+  local publisher="$1" name="$2" version="$3" dest="$4" sha256Var="$5"
+  local base="https://open-vsx.org/api/${publisher}/${name}/${version}/file/${publisher}.${name}-${version}"
+
+  for i in {1..5}; do
+    if curl --silent --fail --location "${base}.vsix" -o "${dest}"; then
+      break
+    fi
+
+    if [[ $i == 5 ]]; then
+      echo "Failed to download ${publisher}.${name}@${version} after 5 attempts" >&2
+      exit 1
+    fi
+    echo "Download of ${publisher}.${name}@${version} failed, attempt $i, retrying..."
+    sleep $(( 10 * (i + 1) ))
+  done
+
+  local expected actual
+  expected=$( curl --silent --fail --location "${base}.sha256" )
+  actual=$( node -e "const c=require('crypto').createHash('sha256'); require('fs').createReadStream(process.argv[1]).on('data',d=>c.update(d)).on('end',()=>console.log(c.digest('hex')))" "${dest}" )
+  if [[ -n "${expected}" && "${actual}" != "${expected}" ]]; then
+    echo "Checksum mismatch for ${publisher}.${name}@${version}: expected ${expected}, got ${actual}" >&2
+    exit 1
+  fi
+  printf -v "${sha256Var}" '%s' "${actual}"
+}
+
+ZH_HANS_VERSION="1.128.0"
+resolve_universal_extension "MS-CEINTL" "vscode-language-pack-zh-hans" "${ZH_HANS_VERSION}" ".build/ai-hub-extensions/zh-hans.vsix" ZH_HANS_SHA256
 # }}}
 
 jsonTmp=$( jq -s '.[0] * .[1]' product.json ../product.json )
@@ -231,8 +263,20 @@ codexExtJson=$( jq -n --arg version "${CODEX_VERSION}" --arg sha256 "${CODEX_SHA
     publisherDisplayName: "OpenAI"
   }
 }' )
-jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" --argjson claudeExt "${claudeExtJson}" --argjson codexExt "${codexExtJson}" \
-  '.builtInExtensions += $exts + [$claudeExt, $codexExt]' product.json )
+zhHansExtJson=$( jq -n --arg version "${ZH_HANS_VERSION}" --arg sha256 "${ZH_HANS_SHA256}" '{
+  name: "MS-CEINTL.vscode-language-pack-zh-hans",
+  version: $version,
+  sha256: $sha256,
+  repo: "https://github.com/microsoft/vscode-loc",
+  vsix: ".build/ai-hub-extensions/zh-hans.vsix",
+  metadata: {
+    id: "152fbf73-6e0f-4169-8c47-f14c32181cd1",
+    publisherId: { publisherId: "ms-ceintl", publisherName: "MS-CEINTL", displayName: "Microsoft", flags: "none" },
+    publisherDisplayName: "Microsoft"
+  }
+}' )
+jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" --argjson claudeExt "${claudeExtJson}" --argjson codexExt "${codexExtJson}" --argjson zhHansExt "${zhHansExtJson}" \
+  '.builtInExtensions += $exts + [$claudeExt, $codexExt, $zhHansExt]' product.json )
 echo "${jsonTmp}" > product.json && unset jsonTmp
 
 cat product.json
