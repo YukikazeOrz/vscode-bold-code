@@ -1,0 +1,34 @@
+[
+  {
+    "name": "Anthropic.claude-code",
+    "version": "2.1.89",
+    "sha256": "f46012808ee27e1c408f82fa5dfd4c1b21ac885702e4d65bd880828cb51fe50c",
+    "repo": "https://github.com/anthropics/claude-code",
+    "metadata": {
+      "id": "20aa0d0e-e336-4cb8-b6d0-73831ba9d165",
+      "publisherId": {
+        "publisherId": "anthropic",
+        "publisherName": "Anthropic",
+        "displayName": "Anthropic",
+        "flags": "none"
+      },
+      "publisherDisplayName": "Anthropic"
+    }
+  },
+  {
+    "name": "openai.chatgpt",
+    "version": "0.5.78",
+    "sha256": "f78998b8d9ba220201da33aec8672a9e651bd606ea3bcdd396482f0a83f1dcac",
+    "repo": "https://github.com/openai/codex",
+    "metadata": {
+      "id": "7bf0412a-41da-431c-bc29-5b548b414efc",
+      "publisherId": {
+        "publisherId": "openai",
+        "publisherName": "openai",
+        "displayName": "OpenAI",
+        "flags": "none"
+      },
+      "publisherDisplayName": "OpenAI"
+    }
+  }
+]

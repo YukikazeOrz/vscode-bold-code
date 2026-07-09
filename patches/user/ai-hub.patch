@@ -1,0 +1,743 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index 5a1a2018..f3af97ad 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -111,6 +111,9 @@ export interface IProductConfiguration {
+ 	readonly walkthroughMetadata?: IProductWalkthrough[];
+ 	readonly featuredExtensions?: IFeaturedExtension[];
+ 
++	readonly aiGatewayUrl?: string;
++	readonly bundledAiExtensions?: readonly { readonly id: string; readonly displayName: string }[];
++
+ 	readonly downloadUrl?: string;
+ 	readonly updateUrl?: string;
+ 	readonly webUrl?: string;
+diff --git a/src/vs/platform/environment/common/aiExtensionHostEnvironment.ts b/src/vs/platform/environment/common/aiExtensionHostEnvironment.ts
+new file mode 100644
+index 00000000..098d02d2
+--- /dev/null
++++ b/src/vs/platform/environment/common/aiExtensionHostEnvironment.ts
+@@ -0,0 +1,27 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { createDecorator } from '../../instantiation/common/instantiation.js';
++
++export const IAiExtensionHostEnvironmentContributor = createDecorator<IAiExtensionHostEnvironmentContributor>('aiExtensionHostEnvironmentContributor');
++
++/**
++ * Lets a higher-level contribution (see contrib/aiHub) inject extra environment
++ * variables into freshly spawned extension host processes, e.g. the custom API
++ * key env var that a bundled AI extension's provider config points at via its
++ * own `env_key`-style setting. Defined at the platform layer purely so
++ * extension-host bootstrapping code (a service) is not made to depend on a
++ * workbench contribution, which would violate the services/contrib layering.
++ */
++export interface IAiExtensionHostEnvironmentContributor {
++	readonly _serviceBrand: undefined;
++
++	/**
++	 * Returns environment variable overrides to mix into a new extension host
++	 * process's environment. Values reflect whatever the user has most recently
++	 * saved; already-running extension hosts do not pick up later changes.
++	 */
++	getEnvironmentOverrides(): Promise<Record<string, string>>;
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+new file mode 100644
+index 00000000..6687f3ed
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+@@ -0,0 +1,203 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { VSBuffer } from '../../../../base/common/buffer.js';
++import { URI } from '../../../../base/common/uri.js';
++import { IFileService } from '../../../../platform/files/common/files.js';
++import { INativeEnvironmentService } from '../../../../platform/environment/common/environment.js';
++import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
++import { ILogService } from '../../../../platform/log/common/log.js';
++import { areSameExtensions } from '../../../../platform/extensionManagement/common/extensionManagementUtil.js';
++import { EnablementState, IWorkbenchExtensionEnablementService } from '../../../services/extensionManagement/common/extensionManagement.js';
++import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
++import { IProductService } from '../../../../platform/product/common/productService.js';
++import {
++	CLAUDE_EXTENSION_ID, CODEX_ENV_KEY, CODEX_PROVIDER_ID, CODEX_EXTENSION_ID,
++	IAiConfigService, IAiHubState, IAiProviderSettings
++} from './aiHubTypes.js';
++
++export class AiConfigService implements IAiConfigService, IAiExtensionHostEnvironmentContributor {
++
++	declare readonly _serviceBrand: undefined;
++
++	constructor(
++		@IFileService private readonly fileService: IFileService,
++		@INativeEnvironmentService private readonly environmentService: INativeEnvironmentService,
++		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
++		@IWorkbenchExtensionEnablementService private readonly extensionEnablementService: IWorkbenchExtensionEnablementService,
++		@IProductService private readonly productService: IProductService,
++		@ILogService private readonly logService: ILogService,
++	) { }
++
++	private get claudeSettingsUri(): URI {
++		return URI.joinPath(this.environmentService.userHome, '.claude', 'settings.json');
++	}
++
++	private get codexConfigTomlUri(): URI {
++		return URI.joinPath(this.environmentService.userHome, '.codex', 'config.toml');
++	}
++
++	private get codexAuthJsonUri(): URI {
++		return URI.joinPath(this.environmentService.userHome, '.codex', 'auth.json');
++	}
++
++	private async readJsonIfExists(uri: URI): Promise<any> {
++		try {
++			const content = await this.fileService.readFile(uri);
++			return JSON.parse(content.value.toString());
++		} catch {
++			return {};
++		}
++	}
++
++	private async readTextIfExists(uri: URI): Promise<string> {
++		try {
++			const content = await this.fileService.readFile(uri);
++			return content.value.toString();
++		} catch {
++			return '';
++		}
++	}
++
++	private async writeFile(uri: URI, contents: string): Promise<void> {
++		await this.fileService.writeFile(uri, VSBuffer.fromString(contents), { atomic: { postfix: '.aiHub-tmp' } });
++	}
++
++	private findExtension(id: string) {
++		return this.extensionsWorkbenchService.local.find(e => areSameExtensions(e.identifier, { id }));
++	}
++
++	async getState(): Promise<IAiHubState> {
++		const [claudeSettings, codexToml, codexAuth] = await Promise.all([
++			this.readJsonIfExists(this.claudeSettingsUri),
++			this.readTextIfExists(this.codexConfigTomlUri),
++			this.readJsonIfExists(this.codexAuthJsonUri),
++			this.extensionsWorkbenchService.whenInitialized,
++		]);
++
++		const claudeEnv = claudeSettings?.env ?? {};
++		const codexBaseUrlMatch = new RegExp(`\\[model_providers\\.${CODEX_PROVIDER_ID}\\][^[]*base_url\\s*=\\s*"([^"]*)"`).exec(codexToml);
++
++		const claudeExt = this.findExtension(CLAUDE_EXTENSION_ID);
++		const codexExt = this.findExtension(CODEX_EXTENSION_ID);
++
++		return {
++			claudeBaseUrl: claudeEnv.ANTHROPIC_BASE_URL ?? '',
++			claudeHasApiKey: !!claudeEnv.ANTHROPIC_AUTH_TOKEN,
++			codexBaseUrl: codexBaseUrlMatch?.[1] ?? '',
++			codexHasApiKey: !!codexAuth?.OPENAI_API_KEY,
++			claudeEnabled: !!claudeExt?.local && this.extensionEnablementService.isEnabled(claudeExt.local),
++			codexEnabled: !!codexExt?.local && this.extensionEnablementService.isEnabled(codexExt.local),
++			gatewayUrl: this.productService.aiGatewayUrl ?? '',
++		};
++	}
++
++	async setExtensionEnabled(id: string, enabled: boolean): Promise<void> {
++		const extension = this.findExtension(id);
++		if (!extension) {
++			this.logService.warn(`[aiHub] cannot toggle unknown extension ${id}`);
++			return;
++		}
++		await this.extensionsWorkbenchService.setEnablement(extension, enabled ? EnablementState.EnabledGlobally : EnablementState.DisabledGlobally);
++	}
++
++	async saveClaudeSettings(settings: IAiProviderSettings): Promise<void> {
++		const uri = this.claudeSettingsUri;
++		const json = await this.readJsonIfExists(uri);
++		json.env = {
++			...json.env,
++			ANTHROPIC_BASE_URL: settings.baseUrl,
++			ANTHROPIC_AUTH_TOKEN: settings.apiKey,
++		};
++		json.claudeCode = { ...json.claudeCode, disableLoginPrompt: true };
++		await this.writeFile(uri, JSON.stringify(json, null, 2) + '\n');
++	}
++
++	async saveCodexSettings(settings: IAiProviderSettings): Promise<void> {
++		await Promise.all([
++			this.writeCodexConfigToml(settings.baseUrl),
++			this.writeCodexAuthJson(settings.apiKey),
++		]);
++	}
++
++	private async writeCodexConfigToml(baseUrl: string): Promise<void> {
++		const uri = this.codexConfigTomlUri;
++		const existing = await this.readTextIfExists(uri);
++		await this.writeFile(uri, mergeCodexConfigToml(existing, baseUrl));
++	}
++
++	private async writeCodexAuthJson(apiKey: string): Promise<void> {
++		const uri = this.codexAuthJsonUri;
++		const json = await this.readJsonIfExists(uri);
++		json.auth_mode = 'apikey';
++		json.OPENAI_API_KEY = apiKey;
++		await this.writeFile(uri, JSON.stringify(json, null, 2) + '\n');
++	}
++
++	async getEnvironmentOverrides(): Promise<Record<string, string>> {
++		try {
++			const auth = await this.readJsonIfExists(this.codexAuthJsonUri);
++			if (auth?.OPENAI_API_KEY) {
++				return { [CODEX_ENV_KEY]: auth.OPENAI_API_KEY };
++			}
++		} catch (err) {
++			this.logService.warn('[aiHub] failed to read codex auth.json for env override', err);
++		}
++		return {};
++	}
++}
++
++/**
++ * Text-level merge for `~/.codex/config.toml`: owns exactly the top-level `model_provider`
++ * directive and its own `[model_providers.ai-hub-gateway]` table, leaving everything else in
++ * the file untouched. No TOML library is bundled with VS Code, and the shape we need to write
++ * is narrow enough that a targeted text merge is safer than adding a new dependency.
++ */
++export function mergeCodexConfigToml(existing: string, baseUrl: string): string {
++	const lines = existing.length ? existing.split(/\r?\n/) : [];
++
++	const sectionHeaderIndex = lines.findIndex(l => /^\s*\[/.test(l));
++	const preambleEnd = sectionHeaderIndex === -1 ? lines.length : sectionHeaderIndex;
++	const preamble = lines.slice(0, preambleEnd);
++	const rest = lines.slice(preambleEnd);
++
++	const providerLineIndex = preamble.findIndex(l => /^\s*model_provider\s*=/.test(l));
++	const providerLine = `model_provider = "${CODEX_PROVIDER_ID}"`;
++	if (providerLineIndex === -1) {
++		preamble.push(providerLine);
++	} else {
++		preamble[providerLineIndex] = providerLine;
++	}
++
++	const ourHeader = `[model_providers.${CODEX_PROVIDER_ID}]`;
++	const ourBlock = [
++		ourHeader,
++		'name = "AI Hub Gateway"',
++		`base_url = "${baseUrl}"`,
++		`env_key = "${CODEX_ENV_KEY}"`,
++		'wire_api = "responses"',
++	];
++
++	const ourHeaderIndex = rest.findIndex(l => l.trim() === ourHeader);
++	if (ourHeaderIndex === -1) {
++		const merged = [...preamble];
++		if (merged.length && merged[merged.length - 1] !== '') {
++			merged.push('');
++		}
++		merged.push(...rest);
++		if (merged.length && merged[merged.length - 1] !== '') {
++			merged.push('');
++		}
++		merged.push(...ourBlock);
++		return merged.join('\n') + '\n';
++	}
++
++	let ourBlockEnd = rest.findIndex((l, i) => i > ourHeaderIndex && /^\s*\[/.test(l));
++	if (ourBlockEnd === -1) {
++		ourBlockEnd = rest.length;
++	}
++	const newRest = [...rest.slice(0, ourHeaderIndex), ...ourBlock, ...rest.slice(ourBlockEnd)];
++	return [...preamble, ...newRest].join('\n') + '\n';
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts
+new file mode 100644
+index 00000000..bfa87a74
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayWebview.ts
+@@ -0,0 +1,38 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { localize } from '../../../../nls.js';
++import { IWebviewWorkbenchService } from '../../webviewPanel/browser/webviewWorkbenchService.js';
++
++export const AI_GATEWAY_WEBVIEW_VIEW_TYPE = 'aiHub.gateway';
++
++/**
++ * Opens the AI gateway login/key-management page as an editor-area tab, the same way the
++ * built-in Simple Browser extension opens external URLs: a cross-origin <iframe> inside our
++ * own sandboxed webview page. That sandboxing is exactly why this can only show the page, not
++ * script it — a same-origin-policy boundary Electron's <webview> tag can bypass but the
++ * standard VS Code webview abstraction deliberately does not expose (see aiHub.contribution.ts
++ * for why importing a key from here still requires manual copy/paste for now).
++ */
++export function openAiGatewayWebview(webviewWorkbenchService: IWebviewWorkbenchService, gatewayUrl: string): void {
++	const webview = webviewWorkbenchService.openWebview(
++		{
++			title: localize('aiHub.gateway.title', "AI Gateway"),
++			options: { retainContextWhenHidden: true },
++			contentOptions: { allowScripts: true },
++			extension: undefined,
++		},
++		AI_GATEWAY_WEBVIEW_VIEW_TYPE,
++		localize('aiHub.gateway.title', "AI Gateway"),
++		undefined,
++		{ preserveFocus: false },
++	);
++
++	webview.webview.setHtml(`<!DOCTYPE html>
++<html>
++<head><meta charset="UTF-8"><style>html,body,iframe{margin:0;padding:0;width:100%;height:100%;border:none;}</style></head>
++<body><iframe src="${gatewayUrl}" sandbox="allow-scripts allow-forms allow-same-origin allow-popups"></iframe></body>
++</html>`);
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+new file mode 100644
+index 00000000..c004cf01
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -0,0 +1,147 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { localize, localize2 } from '../../../../nls.js';
++import { Registry } from '../../../../platform/registry/common/platform.js';
++import { Codicon } from '../../../../base/common/codicons.js';
++import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
++import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
++import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
++import { Extensions as WorkbenchExtensions, IWorkbenchContributionsRegistry } from '../../../common/contributions.js';
++import { IViewContainersRegistry, IViewsRegistry, Extensions as ViewExtensions, ViewContainerLocation, ViewContainer } from '../../../common/views.js';
++import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
++import { Disposable } from '../../../../base/common/lifecycle.js';
++import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
++import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
++import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
++import { ICommandService, CommandsRegistry } from '../../../../platform/commands/common/commands.js';
++import { IProductService } from '../../../../platform/product/common/productService.js';
++import { ILogService } from '../../../../platform/log/common/log.js';
++import { IWebviewWorkbenchService } from '../../webviewPanel/browser/webviewWorkbenchService.js';
++import { WebviewInput } from '../../webviewPanel/browser/webviewEditorInput.js';
++import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
++import { AiConfigService } from './aiConfigService.js';
++import { AiHubViewPane } from './aiHubViewPane.js';
++import { buildAiHubHtml } from './aiHubHtml.js';
++import { openAiGatewayWebview } from './aiGatewayWebview.js';
++import { AI_HUB_OPEN_COMMAND_ID, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService } from './aiHubTypes.js';
++
++const AI_HUB_VIEW_CONTAINER_ID = 'workbench.view.aiHub';
++const AI_HUB_VIEW_ID = 'workbench.view.aiHub.launcher';
++const AI_HUB_WEBVIEW_VIEW_TYPE = 'aiHub.settings';
++const AI_HUB_FIRST_RUN_STORAGE_KEY = 'aiHub.firstRunHandled';
++
++registerSingleton(IAiConfigService, AiConfigService, InstantiationType.Delayed);
++registerSingleton(IAiExtensionHostEnvironmentContributor, AiConfigService, InstantiationType.Delayed);
++
++const aiHubIcon = registerIcon('ai-hub-view-icon', Codicon.chatSparkle, localize('aiHubViewIcon', "AI settings icon in the activity bar."));
++
++const viewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer(
++	{
++		id: AI_HUB_VIEW_CONTAINER_ID,
++		title: localize2('aiHub.viewContainer', "AI Settings"),
++		icon: aiHubIcon,
++		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [AI_HUB_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
++		order: 100,
++	},
++	ViewContainerLocation.Sidebar,
++	{ doNotRegisterOpenCommand: true },
++);
++
++Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
++	id: AI_HUB_VIEW_ID,
++	name: localize2('aiHub.view', "AI Settings"),
++	ctorDescriptor: new SyncDescriptor(AiHubViewPane),
++	canToggleVisibility: false,
++	canMoveView: false,
++	containerIcon: aiHubIcon,
++}], viewContainer);
++
++let currentWebview: WebviewInput | undefined;
++
++CommandsRegistry.registerCommand(AI_HUB_OPEN_COMMAND_ID, async (accessor) => {
++	const webviewWorkbenchService = accessor.get(IWebviewWorkbenchService);
++	const aiConfigService = accessor.get(IAiConfigService);
++	const productService = accessor.get(IProductService);
++	const logService = accessor.get(ILogService);
++
++	if (currentWebview && !currentWebview.isDisposed()) {
++		webviewWorkbenchService.revealWebview(currentWebview, ACTIVE_GROUP, false);
++		return;
++	}
++
++	const state = await aiConfigService.getState();
++	const webview = webviewWorkbenchService.openWebview(
++		{
++			title: localize('aiHub.title', "AI Settings"),
++			options: { retainContextWhenHidden: true },
++			contentOptions: { allowScripts: true },
++			extension: undefined,
++		},
++		AI_HUB_WEBVIEW_VIEW_TYPE,
++		localize('aiHub.title', "AI Settings"),
++		undefined,
++		{ preserveFocus: false },
++	);
++	currentWebview = webview;
++	webview.webview.setHtml(buildAiHubHtml(state));
++
++	webview.webview.onMessage(async ({ message }) => {
++		try {
++			switch (message?.type) {
++				case 'save': {
++					const settings = { baseUrl: message.baseUrl ?? '', apiKey: message.apiKey ?? '' };
++					if (message.provider === 'claude' && settings.apiKey) {
++						await aiConfigService.saveClaudeSettings(settings);
++					} else if (message.provider === 'codex' && settings.apiKey) {
++						await aiConfigService.saveCodexSettings(settings);
++					}
++					const refreshed = await aiConfigService.getState();
++					webview.webview.setHtml(buildAiHubHtml(refreshed));
++					break;
++				}
++				case 'toggleExtension': {
++					const id = message.id === 'claude' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
++					await aiConfigService.setExtensionEnabled(id, !!message.enabled);
++					break;
++				}
++				case 'openGateway': {
++					openAiGatewayWebview(webviewWorkbenchService, productService.aiGatewayUrl ?? '');
++					break;
++				}
++			}
++		} catch (err) {
++			logService.error('[aiHub] failed to handle webview message', err);
++		}
++	});
++
++	webview.webview.onDidDispose(() => {
++		if (currentWebview === webview) {
++			currentWebview = undefined;
++		}
++	});
++});
++
++/**
++ * Stands in for a dedicated first-run wizard: on the very first activation after install,
++ * just open the AI Hub itself (its extension-enablement checkboxes already let the user pick
++ * Claude/Codex on/off), instead of building a second, separate picker UI for the same choice.
++ */
++class AiHubFirstRunContribution extends Disposable {
++	static readonly ID = 'workbench.contrib.aiHubFirstRun';
++
++	constructor(
++		@IStorageService storageService: IStorageService,
++		@ICommandService commandService: ICommandService,
++	) {
++		super();
++		if (!storageService.getBoolean(AI_HUB_FIRST_RUN_STORAGE_KEY, StorageScope.APPLICATION, false)) {
++			storageService.store(AI_HUB_FIRST_RUN_STORAGE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
++			void commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
++		}
++	}
++}
++
++Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(AiHubFirstRunContribution, LifecyclePhase.Restored);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
+new file mode 100644
+index 00000000..c6d50110
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
+@@ -0,0 +1,104 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { IAiHubState } from './aiHubTypes.js';
++
++function escapeHtml(value: string): string {
++	return value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
++}
++
++/**
++ * Builds the AI Hub webview's HTML. Kept as a single self-contained document (no external
++ * resource loading) since the webview's CSP only allows the vscode-webview:// origin;
++ * state is passed in as JSON and mutations flow back out via postMessage.
++ */
++export function buildAiHubHtml(state: IAiHubState): string {
++	const nonce = Math.random().toString(36).slice(2);
++	return `<!DOCTYPE html>
++<html>
++<head>
++<meta charset="UTF-8">
++<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
++<style>
++	body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 0 32px 32px; max-width: 720px; }
++	h1 { font-size: 22px; font-weight: 600; margin-top: 32px; }
++	h2 { font-size: 15px; font-weight: 600; margin-top: 36px; border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 8px; }
++	.card { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border); border-radius: 6px; padding: 16px; margin: 12px 0; }
++	.row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
++	label { display: block; font-size: 12px; opacity: 0.85; margin-bottom: 4px; }
++	input[type=text], input[type=password] { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 3px; padding: 6px 8px; margin-bottom: 10px; }
++	button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; padding: 6px 14px; cursor: pointer; }
++	button:hover { background: var(--vscode-button-hoverBackground); }
++	button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
++	.toggle-label { font-size: 13px; }
++	.hint { font-size: 11px; opacity: 0.7; margin-top: -6px; margin-bottom: 10px; }
++	.status { font-size: 12px; margin-left: 8px; opacity: 0.8; }
++</style>
++</head>
++<body>
++	<h1>AI Settings</h1>
++
++	<h2>Claude Code</h2>
++	<div class="card">
++		<div class="row">
++			<span class="toggle-label">Enable Claude Code extension</span>
++			<input type="checkbox" id="claudeEnabled" ${state.claudeEnabled ? 'checked' : ''}>
++		</div>
++		<label for="claudeBaseUrl">Base URL</label>
++		<input type="text" id="claudeBaseUrl" placeholder="https://..." value="${escapeHtml(state.claudeBaseUrl)}">
++		<label for="claudeApiKey">API Key ${state.claudeHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
++		<input type="password" id="claudeApiKey" placeholder="${state.claudeHasApiKey ? '••••••••' : 'sk-...'}">
++		<button id="saveClaude">Save</button>
++	</div>
++
++	<h2>Codex</h2>
++	<div class="card">
++		<div class="row">
++			<span class="toggle-label">Enable Codex extension</span>
++			<input type="checkbox" id="codexEnabled" ${state.codexEnabled ? 'checked' : ''}>
++		</div>
++		<label for="codexBaseUrl">Base URL</label>
++		<input type="text" id="codexBaseUrl" placeholder="https://..." value="${escapeHtml(state.codexBaseUrl)}">
++		<label for="codexApiKey">API Key ${state.codexHasApiKey ? '<span class="status">(already set — leave blank to keep)</span>' : ''}</label>
++		<input type="password" id="codexApiKey" placeholder="${state.codexHasApiKey ? '••••••••' : 'sk-...'}">
++		<div class="hint">Codex reads this key at extension-host startup; changing it takes effect after reloading the window.</div>
++		<button id="saveCodex">Save</button>
++	</div>
++
++	<h2>AI Gateway</h2>
++	<div class="card">
++		<p style="margin-top:0">Open the gateway to sign in and import an API key directly into the fields above.</p>
++		<button id="openGateway" class="secondary">Open ${escapeHtml(state.gatewayUrl || 'AI Gateway')}</button>
++	</div>
++
++	<script nonce="${nonce}">
++		const vscode = acquireVsCodeApi();
++		const $ = id => document.getElementById(id);
++
++		$('claudeEnabled').addEventListener('change', e => vscode.postMessage({ type: 'toggleExtension', id: 'claude', enabled: e.target.checked }));
++		$('codexEnabled').addEventListener('change', e => vscode.postMessage({ type: 'toggleExtension', id: 'codex', enabled: e.target.checked }));
++
++		$('saveClaude').addEventListener('click', () => vscode.postMessage({
++			type: 'save', provider: 'claude',
++			baseUrl: $('claudeBaseUrl').value, apiKey: $('claudeApiKey').value
++		}));
++		$('saveCodex').addEventListener('click', () => vscode.postMessage({
++			type: 'save', provider: 'codex',
++			baseUrl: $('codexBaseUrl').value, apiKey: $('codexApiKey').value
++		}));
++		$('openGateway').addEventListener('click', () => vscode.postMessage({ type: 'openGateway' }));
++
++		window.addEventListener('message', event => {
++			const message = event.data;
++			if (message.type === 'importedKey') {
++				const target = message.provider === 'claude' ? 'claudeApiKey' : 'codexApiKey';
++				$(target).value = message.apiKey;
++				$(target).placeholder = 'imported — click Save to apply';
++			}
++		});
++	</script>
++</body>
++</html>`;
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+new file mode 100644
+index 00000000..f15bace0
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+@@ -0,0 +1,55 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
++
++export const CLAUDE_EXTENSION_ID = 'Anthropic.claude-code';
++export const CODEX_EXTENSION_ID = 'openai.chatgpt';
++
++export const AI_HUB_OPEN_COMMAND_ID = 'aiHub.open';
++
++/** Env var name Codex's custom `model_providers.<id>.env_key` points at. */
++export const CODEX_PROVIDER_ID = 'ai-hub-gateway';
++export const CODEX_ENV_KEY = 'CODEX_AI_HUB_API_KEY';
++
++export interface IAiProviderSettings {
++	readonly baseUrl: string;
++	/** Never round-tripped back to the webview once saved; write-only from the service's perspective. */
++	readonly apiKey: string;
++}
++
++export interface IAiHubState {
++	readonly claudeBaseUrl: string;
++	readonly claudeHasApiKey: boolean;
++	readonly codexBaseUrl: string;
++	readonly codexHasApiKey: boolean;
++	readonly claudeEnabled: boolean;
++	readonly codexEnabled: boolean;
++	readonly gatewayUrl: string;
++}
++
++export const IAiConfigService = createDecorator<IAiConfigService>('aiConfigService');
++
++export interface IAiConfigService {
++	readonly _serviceBrand: undefined;
++
++	/**
++	 * Reads current base URLs and whether keys are set (never returns the keys themselves)
++	 * plus current enablement of the two bundled extensions, for populating the AI Hub UI.
++	 */
++	getState(): Promise<IAiHubState>;
++
++	/** Writes `~/.claude/settings.json`'s `env` block, preserving unrelated existing keys. */
++	saveClaudeSettings(settings: IAiProviderSettings): Promise<void>;
++
++	/**
++	 * Writes `~/.codex/config.toml` (custom model_provider pointing at settings.baseUrl) and
++	 * `~/.codex/auth.json` (apikey auth mode), preserving unrelated existing keys/tables.
++	 */
++	saveCodexSettings(settings: IAiProviderSettings): Promise<void>;
++
++	/** Enables/disables one of the two bundled AI extensions by id. */
++	setExtensionEnabled(id: string, enabled: boolean): Promise<void>;
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubViewPane.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubViewPane.ts
+new file mode 100644
+index 00000000..14a4c22c
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubViewPane.ts
+@@ -0,0 +1,58 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { ViewPane, IViewPaneOptions } from '../../../browser/parts/views/viewPane.js';
++import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
++import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
++import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
++import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
++import { IViewDescriptorService } from '../../../common/views.js';
++import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
++import { IOpenerService } from '../../../../platform/opener/common/opener.js';
++import { IThemeService } from '../../../../platform/theme/common/themeService.js';
++import { IHoverService } from '../../../../platform/hover/browser/hover.js';
++import { IAccessibleViewInformationService } from '../../../services/accessibility/common/accessibleViewInformationService.js';
++import { ICommandService } from '../../../../platform/commands/common/commands.js';
++import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
++import { AI_HUB_OPEN_COMMAND_ID } from './aiHubTypes.js';
++
++/**
++ * This view renders nothing. Its only purpose is to be the thing the activity bar icon
++ * opens, so we can immediately redirect that click into opening the full AI Hub editor
++ * and collapse the sidebar back down — VS Code's activity bar has no "icon runs a command
++ * directly" contribution point for a plain composite bar entry, only view containers, so
++ * this view is the minimal-footprint way to get a single-click-opens-an-editor icon there.
++ */
++export class AiHubViewPane extends ViewPane {
++
++	constructor(
++		options: IViewPaneOptions,
++		@IKeybindingService keybindingService: IKeybindingService,
++		@IContextMenuService contextMenuService: IContextMenuService,
++		@IConfigurationService configurationService: IConfigurationService,
++		@IContextKeyService contextKeyService: IContextKeyService,
++		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
++		@IInstantiationService instantiationService: IInstantiationService,
++		@IOpenerService openerService: IOpenerService,
++		@IThemeService themeService: IThemeService,
++		@IHoverService hoverService: IHoverService,
++		@ICommandService private readonly commandService: ICommandService,
++		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
++		accessibleViewInformationService?: IAccessibleViewInformationService,
++	) {
++		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService, accessibleViewInformationService);
++	}
++
++	override focus(): void {
++		super.focus();
++		this.redirectToEditor();
++	}
++
++	private redirectToEditor(): void {
++		void this.commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
++		// Defer so we don't fight the composite bar's own reveal-sidebar handling for this click.
++		queueMicrotask(() => this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART));
++	}
++}
+diff --git a/src/vs/workbench/services/extensions/electron-browser/localProcessExtensionHost.ts b/src/vs/workbench/services/extensions/electron-browser/localProcessExtensionHost.ts
+index 4f9b5871..7e512287 100644
+--- a/src/vs/workbench/services/extensions/electron-browser/localProcessExtensionHost.ts
++++ b/src/vs/workbench/services/extensions/electron-browser/localProcessExtensionHost.ts
+@@ -18,6 +18,7 @@ import { IMessagePassingProtocol } from '../../../../base/parts/ipc/common/ipc.j
+ import { BufferedEmitter } from '../../../../base/parts/ipc/common/ipc.net.js';
+ import { acquirePort } from '../../../../base/parts/ipc/electron-browser/ipc.mp.js';
+ import * as nls from '../../../../nls.js';
++import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+ import { IExtensionHostDebugService } from '../../../../platform/debug/common/extensionHostDebug.js';
+ import { extensionHostGraceTimeMs, IExtensionHostProcessOptions, IExtensionHostStarter } from '../../../../platform/extensions/common/extensionHostStarter.js';
+ import { ILabelService } from '../../../../platform/label/common/label.js';
+@@ -136,6 +137,7 @@ export class NativeLocalProcessExtensionHost extends Disposable implements IExte
+ 		@IHostService private readonly _hostService: IHostService,
+ 		@IProductService private readonly _productService: IProductService,
+ 		@IShellEnvironmentService private readonly _shellEnvironmentService: IShellEnvironmentService,
++		@IAiExtensionHostEnvironmentContributor private readonly _aiExtensionHostEnvironmentContributor: IAiExtensionHostEnvironmentContributor,
+ 		@IExtensionHostStarter private readonly _extensionHostStarter: IExtensionHostStarter,
+ 		@IDefaultLogLevelsService private readonly _defaultLogLevelsService: IDefaultLogLevelsService,
+ 	) {
+@@ -219,17 +221,19 @@ export class NativeLocalProcessExtensionHost extends Disposable implements IExte
+ 	}
+ 
+ 	private async _start(): Promise<IMessagePassingProtocol> {
+-		const [extensionHostCreationResult, portNumber, processEnv] = await Promise.all([
++		const [extensionHostCreationResult, portNumber, processEnv, aiEnvOverrides] = await Promise.all([
+ 			this._extensionHostStarter.createExtensionHost(),
+ 			this._tryFindDebugPort(),
+ 			this._shellEnvironmentService.getShellEnv(),
++			this._aiExtensionHostEnvironmentContributor.getEnvironmentOverrides(),
+ 		]);
+ 
+ 		this._extensionHostProcess = new ExtensionHostProcess(extensionHostCreationResult.id, this._extensionHostStarter);
+ 
+ 		const env = objects.mixin(processEnv, {
+ 			VSCODE_ESM_ENTRYPOINT: 'vs/workbench/api/node/extensionHostProcess',
+-			VSCODE_HANDLES_UNCAUGHT_ERRORS: true
++			VSCODE_HANDLES_UNCAUGHT_ERRORS: true,
++			...aiEnvOverrides
+ 		});
+ 
+ 		if (this._environmentService.debugExtensionHost.env) {
+diff --git a/src/vs/workbench/workbench.desktop.main.ts b/src/vs/workbench/workbench.desktop.main.ts
+index 2fc6c8a3..131ca898 100644
+--- a/src/vs/workbench/workbench.desktop.main.ts
++++ b/src/vs/workbench/workbench.desktop.main.ts
+@@ -152,6 +152,8 @@ import './contrib/userDataSync/electron-browser/userDataSync.contribution.js';
+ // Tags
+ import './contrib/tags/electron-browser/workspaceTagsService.js';
+ import './contrib/tags/electron-browser/tags.contribution.js';
++// AI Hub
++import './contrib/aiHub/electron-browser/aiHub.contribution.js';
+ // Performance
+ import './contrib/performance/electron-browser/performance.contribution.js';
+ 
