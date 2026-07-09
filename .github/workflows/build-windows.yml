@@ -1,0 +1,138 @@
+name: Build - Windows
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "**/*.md"
+
+env:
+  APP_NAME: VSCodium
+  BINARY_NAME: codium
+  GH_REPO_PATH: ${{ github.repository }}
+  ORG_NAME: ${{ github.repository_owner }}
+  OS_NAME: windows
+  VSCODE_QUALITY: stable
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    env:
+      VSCODE_ARCH: x64
+    outputs:
+      BUILD_SOURCEVERSION: ${{ env.BUILD_SOURCEVERSION }}
+      MS_COMMIT: ${{ env.MS_COMMIT }}
+      MS_TAG: ${{ env.MS_TAG }}
+      RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Clone VSCode repo
+        run: ./get_repo.sh
+
+      - name: Build
+        env:
+          SHOULD_BUILD: yes
+          SHOULD_BUILD_REH: no
+          SHOULD_BUILD_REH_WEB: no
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./build.sh
+
+      - name: Compress vscode artifact
+        run: |
+          find vscode -type f -not -path "*/node_modules/*" -not -path "vscode/.build/node/*" -not -path "vscode/.git/*" > vscode.txt
+          echo "vscode/.build/extensions/node_modules" >> vscode.txt
+          echo "vscode/.git" >> vscode.txt
+          tar -czf vscode.tar.gz -T vscode.txt
+
+      - name: Upload vscode artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode
+          path: ./vscode.tar.gz
+          retention-days: 1
+
+  build:
+    needs:
+      - compile
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        vscode_arch:
+          - x64
+          - arm64
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
+      MS_COMMIT: ${{ needs.compile.outputs.MS_COMMIT }}
+      MS_TAG: ${{ needs.compile.outputs.MS_TAG }}
+      RELEASE_VERSION: ${{ needs.compile.outputs.RELEASE_VERSION }}
+      SHOULD_BUILD_REH: no
+      SHOULD_BUILD_REH_WEB: no
+      VSCODE_ARCH: ${{ matrix.vscode_arch }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Download vscode artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: vscode
+
+      - name: Build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_arch: ${{ matrix.vscode_arch }}
+          npm_config_target_arch: ${{ matrix.vscode_arch }}
+        run: ./build/windows/package.sh
+
+      - name: Prepare assets
+        # No signing secrets are configured, so binaries/installers come out unsigned —
+        # Windows SmartScreen will warn on first run. Add signing later if needed.
+        run: ./prepare_assets.sh
+
+      - name: Prepare checksums
+        run: ./prepare_checksums.sh
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.vscode_arch }}
+          path: assets/
+          retention-days: 14
