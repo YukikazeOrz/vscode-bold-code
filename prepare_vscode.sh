@@ -161,7 +161,8 @@ download_ai_extension() {
   done
 
   local actual
-  actual=$( shasum -a 256 "${dest}" | cut -d' ' -f1 )
+  # shasum/sha256sum aren't consistently available across macOS/Linux/Windows runners; node is.
+  actual=$( node -e "const c=require('crypto').createHash('sha256'); require('fs').createReadStream(process.argv[1]).on('data',d=>c.update(d)).on('end',()=>console.log(c.digest('hex')))" "${dest}" )
   if [[ "${actual}" != "${sha256}" ]]; then
     echo "Checksum mismatch for ${publisher}.${name}@${version}: expected ${sha256}, got ${actual}" >&2
     exit 1
