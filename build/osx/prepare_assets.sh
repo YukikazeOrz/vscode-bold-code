@@ -66,7 +66,13 @@ fi
 if [[ "${SHOULD_BUILD_DMG}" != "no" ]]; then
   echo "Building and moving DMG"
   pushd "VSCode-darwin-${VSCODE_ARCH}"
-  npx create-dmg ./*.app .
+  # create-dmg exits non-zero if it can't code-sign the DMG (the DMG itself is still produced
+  # either way); skip that attempt entirely when there's no signing identity in the keychain.
+  if [[ -n "${CERTIFICATE_OSX_P12_DATA}" ]]; then
+    npx create-dmg ./*.app .
+  else
+    npx create-dmg --no-code-sign ./*.app .
+  fi
   mv ./*.dmg "../assets/${APP_NAME}.${VSCODE_ARCH}.${RELEASE_VERSION}.dmg"
   popd
 fi
