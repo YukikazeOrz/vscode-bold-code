@@ -31,6 +31,53 @@ export OS_NAME=osx
 export VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 export SHOULD_BUILD=yes
 
+# Keep every reusable download outside vscode/, because get_repo.sh resets that
+# worktree before each build. Override VSCODE_BUILD_CACHE to place it elsewhere.
+export VSCODE_BUILD_CACHE="${VSCODE_BUILD_CACHE:-$(pwd)/.build-cache}"
+export VSCODE_DOWNLOAD_CACHE="${VSCODE_DOWNLOAD_CACHE:-${VSCODE_BUILD_CACHE}/downloads}"
+export VSCODE_EXTENSION_CACHE="${VSCODE_EXTENSION_CACHE:-${VSCODE_BUILD_CACHE}/extensions}"
+export VSCODE_BUILTIN_EXTENSIONS_CACHE="${VSCODE_BUILTIN_EXTENSIONS_CACHE:-${VSCODE_BUILD_CACHE}/builtInExtensions}"
+export npm_config_cache="${npm_config_cache:-${VSCODE_BUILD_CACHE}/npm}"
+export npm_config_devdir="${npm_config_devdir:-${VSCODE_BUILD_CACHE}/node-gyp}"
+export ELECTRON_CACHE="${ELECTRON_CACHE:-${VSCODE_BUILD_CACHE}/electron}"
+export electron_config_cache="${electron_config_cache:-${VSCODE_BUILD_CACHE}/electron}"
+export ELECTRON_BUILDER_CACHE="${ELECTRON_BUILDER_CACHE:-${VSCODE_BUILD_CACHE}/electron-builder}"
+export CARGO_HOME="${CARGO_HOME:-${VSCODE_BUILD_CACHE}/cargo}"
+
+mkdir -p \
+  "${VSCODE_DOWNLOAD_CACHE}" \
+  "${VSCODE_EXTENSION_CACHE}" \
+  "${VSCODE_BUILTIN_EXTENSIONS_CACHE}" \
+  "${npm_config_cache}" \
+  "${npm_config_devdir}" \
+  "${ELECTRON_CACHE}" \
+  "${ELECTRON_BUILDER_CACHE}" \
+  "${CARGO_HOME}"
+
+persist_builtin_extensions() {
+  local source_dir="vscode/.build/builtInExtensions"
+  [[ -d "${source_dir}" ]] || return 0
+
+  mkdir -p "${VSCODE_BUILTIN_EXTENSIONS_CACHE}"
+  local extension_dir extension_name
+  for extension_dir in "${source_dir}"/*; do
+    [[ -f "${extension_dir}/package.json" ]] || continue
+    extension_name=$(basename "${extension_dir}")
+    rm -rf "${VSCODE_BUILTIN_EXTENSIONS_CACHE:?}/${extension_name}"
+    cp -R "${extension_dir}" "${VSCODE_BUILTIN_EXTENSIONS_CACHE}/${extension_name}"
+  done
+}
+
+restore_builtin_extensions() {
+  [[ -d "${VSCODE_BUILTIN_EXTENSIONS_CACHE}" ]] || return 0
+  mkdir -p vscode/.build/builtInExtensions
+  cp -R "${VSCODE_BUILTIN_EXTENSIONS_CACHE}/." vscode/.build/builtInExtensions/
+}
+
+# Preserve anything completed by an interrupted build as well as a successful one.
+persist_builtin_extensions
+trap persist_builtin_extensions EXIT
+
 if [[ -z "${VSCODE_ARCH:-}" ]]; then
   case "$(uname -m)" in
     arm64) VSCODE_ARCH=arm64 ;;
@@ -96,6 +143,7 @@ if [[ -f ".nvmrc" ]]; then
 fi
 
 echo "== Building ${APP_NAME} (${VSCODE_QUALITY}, ${VSCODE_ARCH}) =="
+echo "Build cache: ${VSCODE_BUILD_CACHE}"
 if [[ -n "${CERTIFICATE_OSX_P12_DATA:-}" ]]; then
   echo "Signing certificate detected — will produce a signed, notarized dmg."
 else
@@ -105,6 +153,7 @@ fi
 echo ""
 echo "-- Step 1/3: Clone pinned upstream VS Code --"
 . ./get_repo.sh
+restore_builtin_extensions
 
 echo ""
 echo "-- Step 2/3: Build (apply patches, fetch bundled AI extensions, npm ci, gulp compile) --"

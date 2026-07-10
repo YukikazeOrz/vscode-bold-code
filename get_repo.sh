@@ -92,16 +92,23 @@ fi
 echo "MS_TAG=\"${MS_TAG}\""
 echo "MS_COMMIT=\"${MS_COMMIT}\""
 
-git fetch --depth 1 origin "${MS_COMMIT}"
-git checkout FETCH_HEAD
+if git cat-file -e "${MS_COMMIT}^{commit}" 2>/dev/null; then
+  echo "Using cached upstream commit ${MS_COMMIT}"
+  CHECKOUT_TARGET="${MS_COMMIT}"
+else
+  git fetch --depth 1 origin "${MS_COMMIT}"
+  CHECKOUT_TARGET="FETCH_HEAD"
+fi
+git checkout "${CHECKOUT_TARGET}"
 
-# `git checkout` above is a no-op for the working tree when FETCH_HEAD is
+# `git checkout` above is a no-op for the working tree when the target is
 # already the checked-out commit (e.g. re-running this script after a build
 # failed partway through prepare_vscode.sh) -- it does NOT discard local
 # modifications or restore files deleted by an earlier apply_actions run.
 # Force back to a pristine tree on every run so retries are deterministic.
-git reset -q --hard FETCH_HEAD
+git reset -q --hard "${CHECKOUT_TARGET}"
 git clean -q -fdx
+unset CHECKOUT_TARGET
 
 cd ..
 

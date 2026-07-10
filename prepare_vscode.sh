@@ -133,41 +133,89 @@ setpath_json "product" "tunnelApplicationConfig" '{}'
 # reachable/unthrottled. Other platforms still fetch live since we don't commit vsix for them.
 mkdir -p .build/ai-hub-extensions
 
-resolve_ai_extension() {
-  local publisher="$1" name="$2" version="$3" target="$4" dest="$5" sha256Var="$6"
-  local localFile="../ai-hub-extensions/${name}-${version}-${target}.vsix"
-  local expected=""
+sha256_file() {
+  node -e "const c=require('crypto').createHash('sha256'); require('fs').createReadStream(process.argv[1]).on('data',d=>c.update(d)).on('end',()=>console.log(c.digest('hex')))" "$1"
+}
 
-  if [[ -f "${localFile}" ]]; then
+download_with_retries() {
+  local url="$1" dest="$2" label="$3" temp="${2}.part.$$"
+  rm -f "${temp}"
+
+  for i in {1..5}; do
+    if curl --silent --fail --location "${url}" -o "${temp}"; then
+      mv "${temp}" "${dest}"
+      return 0
+    fi
+
+    rm -f "${temp}"
+    if [[ $i == 5 ]]; then
+      echo "Failed to download ${label} after 5 attempts" >&2
+      exit 1
+    fi
+    echo "Download of ${label} failed, attempt $i, retrying..."
+    sleep $(( 10 * (i + 1) ))
+  done
+}
+
+resolve_open_vsx_extension() {
+  local publisher="$1" name="$2" version="$3" target="$4" dest="$5" sha256Var="$6" localFile="${7:-}"
+  local fileBase base label cacheVsix="" cacheSha="" expected="" actual="" cacheHit="no"
+
+  if [[ -n "${target}" ]]; then
+    fileBase="${publisher}.${name}-${version}@${target}"
+    base="https://open-vsx.org/api/${publisher}/${name}/${target}/${version}/file/${fileBase}"
+    label="${publisher}.${name}@${version} (${target})"
+  else
+    fileBase="${publisher}.${name}-${version}"
+    base="https://open-vsx.org/api/${publisher}/${name}/${version}/file/${fileBase}"
+    label="${publisher}.${name}@${version}"
+  fi
+
+  if [[ -n "${localFile}" && -f "${localFile}" ]]; then
     cp "${localFile}" "${dest}"
   else
-    local fileBase="${publisher}.${name}-${version}@${target}"
-    local base="https://open-vsx.org/api/${publisher}/${name}/${target}/${version}/file/${fileBase}"
+    if [[ -n "${VSCODE_EXTENSION_CACHE:-}" ]]; then
+      mkdir -p "${VSCODE_EXTENSION_CACHE}"
+      cacheVsix="${VSCODE_EXTENSION_CACHE}/${fileBase}.vsix"
+      cacheSha="${VSCODE_EXTENSION_CACHE}/${fileBase}.sha256"
+    fi
 
-    for i in {1..5}; do
-      if curl --silent --fail --location "${base}.vsix" -o "${dest}"; then
-        break
+    if [[ -f "${cacheVsix}" && -f "${cacheSha}" ]]; then
+      expected=$(awk '{print $1}' "${cacheSha}")
+      actual=$(sha256_file "${cacheVsix}")
+      if [[ -n "${expected}" && "${actual}" == "${expected}" ]]; then
+        echo "Using cached extension: ${label}"
+        cp "${cacheVsix}" "${dest}"
+        cacheHit="yes"
+      else
+        echo "Discarding invalid cached extension: ${label}" >&2
+        rm -f "${cacheVsix}" "${cacheSha}"
+        expected=""
       fi
+    fi
 
-      if [[ $i == 5 ]]; then
-        echo "Failed to download ${publisher}.${name}@${version} (${target}) after 5 attempts" >&2
+    if [[ "${cacheHit}" != "yes" ]]; then
+      download_with_retries "${base}.vsix" "${dest}" "${label}"
+      download_with_retries "${base}.sha256" "${dest}.sha256" "${label} checksum"
+      expected=$(awk '{print $1}' "${dest}.sha256")
+      rm -f "${dest}.sha256"
+      actual=$(sha256_file "${dest}")
+
+      if [[ -z "${expected}" || "${actual}" != "${expected}" ]]; then
+        echo "Checksum mismatch for ${label}: expected ${expected:-<empty>}, got ${actual}" >&2
         exit 1
       fi
-      echo "Download of ${publisher}.${name}@${version} (${target}) failed, attempt $i, retrying..."
-      sleep $(( 10 * (i + 1) ))
-    done
 
-    expected=$( curl --silent --fail --location "${base}.sha256" )
-    if [[ -z "${expected}" ]]; then
-      echo "Could not fetch published checksum for ${publisher}.${name}@${version} (${target})" >&2
-      exit 1
+      if [[ -n "${cacheVsix}" ]]; then
+        cp "${dest}" "${cacheVsix}"
+        printf '%s\n' "${expected}" > "${cacheSha}"
+      fi
     fi
   fi
 
-  local actual
-  actual=$( node -e "const c=require('crypto').createHash('sha256'); require('fs').createReadStream(process.argv[1]).on('data',d=>c.update(d)).on('end',()=>console.log(c.digest('hex')))" "${dest}" )
+  actual=$(sha256_file "${dest}")
   if [[ -n "${expected}" && "${actual}" != "${expected}" ]]; then
-    echo "Checksum mismatch for ${publisher}.${name}@${version} (${target}): expected ${expected}, got ${actual}" >&2
+    echo "Checksum mismatch for ${label}: expected ${expected}, got ${actual}" >&2
     exit 1
   fi
   printf -v "${sha256Var}" '%s' "${actual}"
@@ -185,7 +233,7 @@ case "${OS_NAME}-${VSCODE_ARCH}" in
   linux-arm64) CLAUDE_TARGET="alpine-arm64" ;;
   *) echo "No known Anthropic.claude-code Open VSX build for platform ${OS_NAME}-${VSCODE_ARCH}" >&2; exit 1 ;;
 esac
-resolve_ai_extension "anthropic" "claude-code" "${CLAUDE_VERSION}" "${CLAUDE_TARGET}" ".build/ai-hub-extensions/claude-code.vsix" CLAUDE_SHA256
+resolve_open_vsx_extension "anthropic" "claude-code" "${CLAUDE_VERSION}" "${CLAUDE_TARGET}" ".build/ai-hub-extensions/claude-code.vsix" CLAUDE_SHA256 "../ai-hub-extensions/claude-code-${CLAUDE_VERSION}-${CLAUDE_TARGET}.vsix"
 
 CODEX_VERSION="26.5623.141536"
 case "${OS_NAME}-${VSCODE_ARCH}" in
@@ -197,42 +245,14 @@ case "${OS_NAME}-${VSCODE_ARCH}" in
   linux-arm64) CODEX_TARGET="linux-arm64" ;;
   *) echo "No known openai.chatgpt Open VSX build for platform ${OS_NAME}-${VSCODE_ARCH}" >&2; exit 1 ;;
 esac
-resolve_ai_extension "openai" "chatgpt" "${CODEX_VERSION}" "${CODEX_TARGET}" ".build/ai-hub-extensions/codex.vsix" CODEX_SHA256
+resolve_open_vsx_extension "openai" "chatgpt" "${CODEX_VERSION}" "${CODEX_TARGET}" ".build/ai-hub-extensions/codex.vsix" CODEX_SHA256 "../ai-hub-extensions/chatgpt-${CODEX_VERSION}-${CODEX_TARGET}.vsix"
 
-# Chinese (Simplified) language pack -- unlike claude-code/codex this ships one
-# universal vsix for every platform, so no per-target resolution is needed.
-resolve_universal_extension() {
-  local publisher="$1" name="$2" version="$3" dest="$4" sha256Var="$5"
-  local base="https://open-vsx.org/api/${publisher}/${name}/${version}/file/${publisher}.${name}-${version}"
-
-  for i in {1..5}; do
-    if curl --silent --fail --location "${base}.vsix" -o "${dest}"; then
-      break
-    fi
-
-    if [[ $i == 5 ]]; then
-      echo "Failed to download ${publisher}.${name}@${version} after 5 attempts" >&2
-      exit 1
-    fi
-    echo "Download of ${publisher}.${name}@${version} failed, attempt $i, retrying..."
-    sleep $(( 10 * (i + 1) ))
-  done
-
-  local expected actual
-  expected=$( curl --silent --fail --location "${base}.sha256" )
-  actual=$( node -e "const c=require('crypto').createHash('sha256'); require('fs').createReadStream(process.argv[1]).on('data',d=>c.update(d)).on('end',()=>console.log(c.digest('hex')))" "${dest}" )
-  if [[ -n "${expected}" && "${actual}" != "${expected}" ]]; then
-    echo "Checksum mismatch for ${publisher}.${name}@${version}: expected ${expected}, got ${actual}" >&2
-    exit 1
-  fi
-  printf -v "${sha256Var}" '%s' "${actual}"
-}
-
+# Chinese (Simplified) language pack and SSH ship one universal VSIX.
 ZH_HANS_VERSION="1.128.0"
-resolve_universal_extension "MS-CEINTL" "vscode-language-pack-zh-hans" "${ZH_HANS_VERSION}" ".build/ai-hub-extensions/zh-hans.vsix" ZH_HANS_SHA256
+resolve_open_vsx_extension "MS-CEINTL" "vscode-language-pack-zh-hans" "${ZH_HANS_VERSION}" "" ".build/ai-hub-extensions/zh-hans.vsix" ZH_HANS_SHA256
 
 OPEN_REMOTE_SSH_VERSION="0.2.0"
-resolve_universal_extension "jeanp413" "open-remote-ssh" "${OPEN_REMOTE_SSH_VERSION}" ".build/ai-hub-extensions/open-remote-ssh.vsix" OPEN_REMOTE_SSH_SHA256
+resolve_open_vsx_extension "jeanp413" "open-remote-ssh" "${OPEN_REMOTE_SSH_VERSION}" "" ".build/ai-hub-extensions/open-remote-ssh.vsix" OPEN_REMOTE_SSH_SHA256
 # }}}
 
 jsonTmp=$( jq -s '.[0] * .[1]' product.json ../product.json )
