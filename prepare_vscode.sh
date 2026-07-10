@@ -15,6 +15,9 @@ cd vscode || { echo "'vscode' dir not found"; exit 1; }
 
 { set +x; } 2>/dev/null
 
+. ../build/ensure_node.sh
+ensure_node_from_nvmrc ".nvmrc"
+
 # {{{ product.json
 cp product.json{,.bak}
 

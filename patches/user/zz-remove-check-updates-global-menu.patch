@@ -1,0 +1,30 @@
+diff --git a/src/vs/workbench/browser/parts/globalCompositeBar.ts b/src/vs/workbench/browser/parts/globalCompositeBar.ts
+index 0c1f194..53e38f3 100644
+--- a/src/vs/workbench/browser/parts/globalCompositeBar.ts
++++ b/src/vs/workbench/browser/parts/globalCompositeBar.ts
+@@ -236,7 +236,7 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
+ 	private async run(): Promise<void> {
+ 		const disposables = new DisposableStore();
+ 		const menu = disposables.add(this.menuService.createMenu(this.menuId, this.contextKeyService));
+-		const actions = await this.resolveMainMenuActions(menu, disposables);
++		const actions = removeCheckForUpdatesActions(await this.resolveMainMenuActions(menu, disposables));
+ 		const { anchorAlignment, anchorAxisAlignment } = this.contextMenuAlignmentOptions() ?? { anchorAlignment: undefined, anchorAxisAlignment: undefined };
+ 
+ 		this.contextMenuService.showContextMenu({
+@@ -255,6 +255,16 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
+ 	}
+ }
+ 
++function removeCheckForUpdatesActions(actions: IAction[]): IAction[] {
++	const filtered = actions.filter(action => action.id !== 'update.check' && action.id !== 'update.checkForUpdate');
++	return filtered.filter((action, index) => {
++		if (!(action instanceof Separator)) {
++			return true;
++		}
++		return index > 0 && index < filtered.length - 1 && !(filtered[index - 1] instanceof Separator);
++	});
++}
++
+ export class AccountsActivityActionViewItem extends AbstractGlobalActivityActionViewItem {
+ 
+ 	static readonly ACCOUNTS_VISIBILITY_PREFERENCE_KEY = 'workbench.activity.showAccounts';

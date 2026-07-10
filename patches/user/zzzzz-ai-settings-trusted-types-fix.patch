@@ -1,0 +1,181 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+index 00a6d46..c4daadb 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+@@ -15,7 +15,6 @@ import { INotificationService } from '../../../../platform/notification/common/n
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+ import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+ import { IBrowserViewModel, IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
+-import { buildAiHubHtml } from './aiHubHtml.js';
+ import { AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController } from './aiHubTypes.js';
+ 
+ type AiHubDrawerKind = 'settings' | 'gateway';
+@@ -246,18 +245,159 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 	private renderSettings(state: Awaited<ReturnType<IAiConfigService['getState']>>): void {
+ 		const document = mainWindow.document;
+ 		this.settingsDomDisposables.clear();
+-		const parsed = new mainWindow.DOMParser().parseFromString(buildAiHubHtml(state), 'text/html');
+ 		const fragment = document.createDocumentFragment();
+-		for (const style of Array.from(parsed.head.querySelectorAll('style'))) {
+-			const styleElement = document.createElement('style');
+-			styleElement.textContent = style.textContent;
+-			fragment.appendChild(styleElement);
+-		}
+-		for (const child of Array.from(parsed.body.children)) {
+-			if (child.tagName.toLowerCase() !== 'script') {
+-				fragment.appendChild(document.importNode(child, true));
++
++		const styleElement = document.createElement('style');
++		styleElement.textContent = `
++			:host { display: block; box-sizing: border-box; height: 100%; overflow: auto; font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 4px 20px 28px; }
++			h2 { font-size: 15px; font-weight: 600; margin-top: 28px; border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
++			.card { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border); border-radius: 6px; padding: 16px; margin: 12px 0; }
++			label { display: block; font-size: 12px; opacity: 0.85; margin-bottom: 4px; }
++			input[type=text], input[type=password] { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 3px; padding: 6px 8px; margin-bottom: 10px; }
++			button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; padding: 6px 14px; cursor: pointer; }
++			button:hover { background: var(--vscode-button-hoverBackground); }
++			button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
++			.hint { font-size: 11px; opacity: 0.7; margin-top: -6px; margin-bottom: 10px; }
++			.status { font-size: 12px; margin-left: 8px; opacity: 0.8; }
++			.switch { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; }
++			.switch input { opacity: 0; width: 0; height: 0; }
++			.switch .slider { position: absolute; inset: 0; cursor: pointer; background: var(--vscode-input-border); border-radius: 999px; transition: background .15s; }
++			.switch .slider::before { content: ""; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px; background: var(--vscode-button-foreground); border-radius: 50%; transition: transform .15s; }
++			.switch input:checked + .slider { background: var(--vscode-button-background); }
++			.switch input:checked + .slider::before { transform: translateX(14px); }
++			.switch input:disabled + .slider { opacity: 0.45; cursor: default; }
++			.fields[data-enabled="false"] { display: none; }
++			.mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 18px; }
++			.mode-button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid var(--vscode-widget-border); min-height: 34px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++			.mode-button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
++			.agent-note { font-size: 12px; opacity: 0.72; margin: -6px 0 14px; }
++			p { margin-top: 0; }
++		`;
++		fragment.appendChild(styleElement);
++
++		const createButton = (id: string, label: string, className?: string): HTMLButtonElement => {
++			const button = document.createElement('button');
++			button.id = id;
++			button.textContent = label;
++			if (className) {
++				button.className = className;
++			}
++			return button;
++		};
++
++		const createInput = (id: string, type: 'text' | 'password', placeholder: string, value = ''): HTMLInputElement => {
++			const input = document.createElement('input');
++			input.id = id;
++			input.type = type;
++			input.placeholder = placeholder;
++			input.value = value;
++			return input;
++		};
++
++		const appendLabel = (parent: HTMLElement, forId: string, labelText: string, showStatus: boolean): void => {
++			const label = document.createElement('label');
++			label.htmlFor = forId;
++			label.append(document.createTextNode(labelText));
++			if (showStatus) {
++				const status = document.createElement('span');
++				status.className = 'status';
++				status.textContent = '(already set - leave blank to keep)';
++				label.appendChild(status);
++			}
++			parent.appendChild(label);
++		};
++
++		const createSwitch = (id: string, checked: boolean, disabled: boolean): HTMLLabelElement => {
++			const label = document.createElement('label');
++			label.className = 'switch';
++			const input = document.createElement('input');
++			input.type = 'checkbox';
++			input.id = id;
++			input.checked = checked;
++			input.disabled = disabled;
++			const slider = document.createElement('span');
++			slider.className = 'slider';
++			label.append(input, slider);
++			return label;
++		};
++
++		const createSection = (title: string, switchElement: HTMLLabelElement, fieldsId: string, enabled: boolean, baseUrlId: string, baseUrl: string, apiKeyId: string, hasApiKey: boolean, saveButtonId: string, hint?: string): HTMLElement[] => {
++			const heading = document.createElement('h2');
++			const titleElement = document.createElement('span');
++			titleElement.textContent = title;
++			heading.append(titleElement, switchElement);
++
++			const card = document.createElement('div');
++			card.className = 'card';
++			const fields = document.createElement('div');
++			fields.className = 'fields';
++			fields.id = fieldsId;
++			fields.dataset.enabled = enabled ? 'true' : 'false';
++			appendLabel(fields, baseUrlId, 'Base URL', false);
++			fields.appendChild(createInput(baseUrlId, 'text', 'https://...', baseUrl));
++			appendLabel(fields, apiKeyId, 'API Key ', hasApiKey);
++			fields.appendChild(createInput(apiKeyId, 'password', hasApiKey ? '••••••••' : 'sk-...'));
++			if (hint) {
++				const hintElement = document.createElement('div');
++				hintElement.className = 'hint';
++				hintElement.textContent = hint;
++				fields.appendChild(hintElement);
+ 			}
++			fields.appendChild(createButton(saveButtonId, 'Save'));
++			card.appendChild(fields);
++			return [heading, card];
++		};
++
++		const modeGrid = document.createElement('div');
++		modeGrid.className = 'mode-grid';
++		modeGrid.setAttribute('role', 'group');
++		modeGrid.setAttribute('aria-label', 'AI mode');
++		for (const [mode, label] of [['edit', '编辑模式'], ['claudeAgent', 'Claude Agent'], ['codexAgent', 'Codex Agent']] as const) {
++			const button = createButton('', label, 'mode-button');
++			button.dataset.mode = mode;
++			button.setAttribute('aria-pressed', state.mode === mode ? 'true' : 'false');
++			modeGrid.appendChild(button);
+ 		}
++		fragment.appendChild(modeGrid);
++
++		const agentNote = document.createElement('div');
++		agentNote.className = 'agent-note';
++		agentNote.textContent = state.mode === 'edit' ? '当前保持完整编辑器布局。' : '当前仅保留所选 Agent 对话。';
++		fragment.appendChild(agentNote);
++
++		fragment.append(...createSection(
++			'Claude Code',
++			createSwitch('claudeEnabled', state.claudeEnabled, state.mode !== 'edit'),
++			'claudeFields',
++			state.mode === 'claudeAgent' || (state.mode === 'edit' && state.claudeEnabled),
++			'claudeBaseUrl',
++			state.claudeBaseUrl,
++			'claudeApiKey',
++			state.claudeHasApiKey,
++			'saveClaude',
++		));
++
++		fragment.append(...createSection(
++			'Codex',
++			createSwitch('codexEnabled', state.codexEnabled, state.mode !== 'edit'),
++			'codexFields',
++			state.mode === 'codexAgent' || (state.mode === 'edit' && state.codexEnabled),
++			'codexBaseUrl',
++			state.codexBaseUrl,
++			'codexApiKey',
++			state.codexHasApiKey,
++			'saveCodex',
++			'Codex reads this key at extension-host startup; changing it takes effect after reloading the window.',
++		));
++
++		const editorHeading = document.createElement('h2');
++		editorHeading.textContent = '编辑器设置';
++		const editorCard = document.createElement('div');
++		editorCard.className = 'card';
++		const editorDescription = document.createElement('p');
++		editorDescription.textContent = '打开原始的 VS Code 编辑器设置界面。';
++		editorCard.append(editorDescription, createButton('openEditorSettings', '打开编辑器设置', 'secondary'));
++		fragment.append(editorHeading, editorCard);
+ 
+ 		this.settingsRoot.replaceChildren(fragment);
+ 		this.hookSettingsDom(state.mode);

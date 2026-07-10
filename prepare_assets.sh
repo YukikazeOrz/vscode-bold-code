@@ -3,6 +3,9 @@
 
 set -e
 
+. ./build/ensure_node.sh
+ensure_node_from_nvmrc ".nvmrc"
+
 APP_NAME_LC="$( echo "${APP_NAME}" | awk '{print tolower($0)}' )"
 
 mkdir -p assets

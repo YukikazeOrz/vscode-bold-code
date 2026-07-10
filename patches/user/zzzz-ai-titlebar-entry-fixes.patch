@@ -1,0 +1,32 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index bc6745b..93a7c96 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -14,6 +14,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
+ import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+ import { Extensions as WorkbenchExtensions, IWorkbenchContributionsRegistry } from '../../../common/contributions.js';
+ import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
++import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
+ import { AiConfigService } from './aiConfigService.js';
+ import { AiHubDrawerService } from './aiHubDrawerService.js';
+ import { AiHubModeController } from './aiHubModeController.js';
+@@ -32,7 +33,7 @@ MenuRegistry.appendMenuItem(MenuId.TitleBar, {
+ 		title: localize2('aiHub.topBarOpenSettings', "Open AI Settings"),
+ 		icon: Codicon.settingsGear,
+ 	},
+-	group: 'navigation',
++	group: TitleBarLeadingActionsGroup,
+ 	order: -100,
+ });
+ 
+@@ -40,9 +41,9 @@ MenuRegistry.appendMenuItem(MenuId.TitleBar, {
+ 	command: {
+ 		id: AI_GATEWAY_OPEN_COMMAND_ID,
+ 		title: localize2('aiHub.topBarOpenGateway', "Open AI Gateway"),
+ 		icon: Codicon.globe,
+ 	},
+-	group: 'navigation',
++	group: TitleBarLeadingActionsGroup,
+ 	order: -99,
+ });
+ 

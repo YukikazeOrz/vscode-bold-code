@@ -1,0 +1,213 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+index c92ba94..00a6d46 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+@@ -7,7 +7,7 @@ import './media/aiHubDrawer.css';
+ import { $, addDisposableListener, EventType } from '../../../../base/browser/dom.js';
+ import { getZoomFactor } from '../../../../base/browser/browser.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+-import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
++import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+ import { localize } from '../../../../nls.js';
+ import { ICommandService } from '../../../../platform/commands/common/commands.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+@@ -15,7 +15,6 @@ import { INotificationService } from '../../../../platform/notification/common/n
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+ import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+ import { IBrowserViewModel, IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
+-import { IOverlayWebview, IWebviewService, WebviewContentPurpose } from '../../webview/browser/webview.js';
+ import { buildAiHubHtml } from './aiHubHtml.js';
+ import { AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController } from './aiHubTypes.js';
+ 
+@@ -34,14 +33,14 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 	private readonly container: HTMLElement;
+ 	private readonly titleElement: HTMLElement;
+ 	private readonly settingsHost: HTMLElement;
++	private readonly settingsRoot: ShadowRoot;
+ 	private readonly gatewayHost: HTMLElement;
+-	private readonly settingsWebview: IOverlayWebview;
++	private readonly settingsDomDisposables = this._register(new DisposableStore());
+ 	private gatewayModel: IBrowserViewModel | undefined;
+ 	private activeDrawer: AiHubDrawerKind | undefined;
+ 	private operationId = 0;
+ 
+ 	constructor(
+-		@IWebviewService webviewService: IWebviewService,
+ 		@IBrowserViewWorkbenchService private readonly browserViewService: IBrowserViewWorkbenchService,
+ 		@IProductService private readonly productService: IProductService,
+ 		@IAiConfigService private readonly aiConfigService: IAiConfigService,
+@@ -71,6 +70,7 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 
+ 		const body = $('.ai-hub-drawer-body');
+ 		this.settingsHost = $('.ai-hub-drawer-content.ai-hub-drawer-settings');
++		this.settingsRoot = this.settingsHost.attachShadow({ mode: 'open' });
+ 		this.gatewayHost = $('.ai-hub-drawer-content.ai-hub-drawer-gateway');
+ 		body.append(this.settingsHost, this.gatewayHost);
+ 		this.container.appendChild(body);
+@@ -79,18 +79,6 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		workbenchContainer.appendChild(this.container);
+ 		this._register(toDisposable(() => this.container.remove()));
+ 
+-		this.settingsWebview = this._register(webviewService.createWebviewOverlay({
+-			providedViewType: 'aiHub.settings.drawer',
+-			title: localize('aiHub.title', "AI Settings"),
+-			options: {
+-				purpose: WebviewContentPurpose.WebviewView,
+-				retainContextWhenHidden: true,
+-			},
+-			contentOptions: { allowScripts: true },
+-			extension: undefined,
+-		}));
+-
+-		this._register(this.settingsWebview.onMessage(({ message }) => void this.handleSettingsMessage(message)));
+ 		this._register(addDisposableListener(closeButton, EventType.CLICK, () => void this.close()));
+ 		this._register(addDisposableListener(mainWindow, EventType.KEY_DOWN, event => {
+ 			if (event.key === 'Escape' && this.activeDrawer) {
+@@ -180,8 +168,6 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		}
+ 
+ 		if (kind === 'settings') {
+-			this.settingsWebview.claim(this, mainWindow, undefined);
+-			this.settingsWebview.setAnchorElement(this.settingsHost, this.container);
+ 			return;
+ 		}
+ 
+@@ -190,7 +176,8 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 
+ 	private async hideActiveContent(): Promise<void> {
+ 		if (this.activeDrawer === 'settings') {
+-			this.settingsWebview.release(this);
++			this.settingsDomDisposables.clear();
++			this.settingsRoot.replaceChildren();
+ 		}
+ 		if (this.activeDrawer === 'gateway' && this.gatewayModel) {
+ 			await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway drawer', error));
+@@ -253,7 +240,74 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 
+ 	private async refreshSettings(): Promise<void> {
+ 		const state = await this.aiConfigService.getState();
+-		this.settingsWebview.setHtml(buildAiHubHtml(state));
++		this.renderSettings(state);
++	}
++
++	private renderSettings(state: Awaited<ReturnType<IAiConfigService['getState']>>): void {
++		const document = mainWindow.document;
++		this.settingsDomDisposables.clear();
++		const parsed = new mainWindow.DOMParser().parseFromString(buildAiHubHtml(state), 'text/html');
++		const fragment = document.createDocumentFragment();
++		for (const style of Array.from(parsed.head.querySelectorAll('style'))) {
++			const styleElement = document.createElement('style');
++			styleElement.textContent = style.textContent;
++			fragment.appendChild(styleElement);
++		}
++		for (const child of Array.from(parsed.body.children)) {
++			if (child.tagName.toLowerCase() !== 'script') {
++				fragment.appendChild(document.importNode(child, true));
++			}
++		}
++
++		this.settingsRoot.replaceChildren(fragment);
++		this.hookSettingsDom(state.mode);
++	}
++
++	private hookSettingsDom(currentMode: AiHubMode): void {
++		const $ = (id: string) => this.settingsRoot.querySelector<HTMLElement>(`#${id}`);
++		this.settingsRoot.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
++			this.settingsDomDisposables.add(addDisposableListener(button, EventType.CLICK, () => {
++				const mode = parseAiHubMode(button.dataset.mode);
++				if (mode !== currentMode) {
++					void this.handleSettingsMessage({ type: 'setMode', mode });
++				}
++			}));
++		});
++
++		this.registerCheckbox($('claudeEnabled') as HTMLInputElement | null, 'claudeFields', 'claude');
++		this.registerCheckbox($('codexEnabled') as HTMLInputElement | null, 'codexFields', 'codex');
++		this.registerSaveButton('saveClaude', 'claude', 'claudeBaseUrl', 'claudeApiKey');
++		this.registerSaveButton('saveCodex', 'codex', 'codexBaseUrl', 'codexApiKey');
++
++		const openEditorSettings = $('openEditorSettings');
++		if (openEditorSettings) {
++			this.settingsDomDisposables.add(addDisposableListener(openEditorSettings, EventType.CLICK, () => void this.handleSettingsMessage({ type: 'openEditorSettings' })));
++		}
++	}
++
++	private registerCheckbox(input: HTMLInputElement | null, fieldsId: string, id: 'claude' | 'codex'): void {
++		if (!input) {
++			return;
++		}
++		this.settingsDomDisposables.add(addDisposableListener(input, EventType.CHANGE, () => {
++			const fields = this.settingsRoot.querySelector<HTMLElement>(`#${fieldsId}`);
++			if (fields) {
++				fields.dataset.enabled = input.checked ? 'true' : 'false';
++			}
++			void this.handleSettingsMessage({ type: 'toggleExtension', id, enabled: input.checked });
++		}));
++	}
++
++	private registerSaveButton(buttonId: string, provider: 'claude' | 'codex', baseUrlId: string, apiKeyId: string): void {
++		const button = this.settingsRoot.querySelector<HTMLElement>(`#${buttonId}`);
++		const baseUrl = this.settingsRoot.querySelector<HTMLInputElement>(`#${baseUrlId}`);
++		const apiKey = this.settingsRoot.querySelector<HTMLInputElement>(`#${apiKeyId}`);
++		if (!button || !baseUrl || !apiKey) {
++			return;
++		}
++		this.settingsDomDisposables.add(addDisposableListener(button, EventType.CLICK, () => {
++			void this.handleSettingsMessage({ type: 'save', provider, baseUrl: baseUrl.value, apiKey: apiKey.value });
++		}));
+ 	}
+ 
+ 	private async handleSettingsMessage(message: any): Promise<void> {
+@@ -310,7 +364,6 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 
+ 	override dispose(): void {
+ 		void this.gatewayModel?.setVisible(false);
+-		this.settingsWebview.release(this);
+ 		super.dispose();
+ 	}
+ }
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
+index 98e5bbf..960e9e3 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubHtml.ts
+@@ -78,12 +78,6 @@ export function buildAiHubHtml(state: IAiHubState): string {
+ 		</div>
+ 	</div>
+ 
+-	<h2>AI Gateway</h2>
+-	<div class="card">
+-		<p style="margin-top:0">Open the gateway to sign in and import an API key directly into the fields above.</p>
+-		<button id="openGateway" class="secondary">Open ${escapeHtml(state.gatewayUrl || 'AI Gateway')}</button>
+-	</div>
+-
+ 	<h2>编辑器设置</h2>
+ 	<div class="card">
+ 		<p style="margin-top:0">打开原始的 VS Code 编辑器设置界面。</p>
+@@ -121,7 +115,6 @@ export function buildAiHubHtml(state: IAiHubState): string {
+ 			type: 'save', provider: 'codex',
+ 			baseUrl: $('codexBaseUrl').value, apiKey: $('codexApiKey').value
+ 		}));
+-		$('openGateway').addEventListener('click', () => vscode.postMessage({ type: 'openGateway' }));
+ 		$('openEditorSettings').addEventListener('click', () => vscode.postMessage({ type: 'openEditorSettings' }));
+ 
+ 		window.addEventListener('message', event => {
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
+index 39bd37a..e7dfda9 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
+@@ -78,8 +78,15 @@
+ 	flex: 1;
+ }
+ 
++.ai-hub-drawer-body {
++	display: flex;
++	overflow: hidden;
++}
++
+ .ai-hub-drawer-content {
+ 	display: none;
++	width: 100%;
++	height: 100%;
+ }
+ 
+ .ai-hub-drawer-content.active {

@@ -102,6 +102,9 @@ command -v jq >/dev/null || { echo "jq is required (brew install jq)" >&2; exit 
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools are required (run: xcode-select --install)" >&2; exit 1; }
 
+. ./build/ensure_node.sh
+ensure_node_from_nvmrc ".nvmrc"
+
 # Homebrew's rustup formula symlinks only the `rustup` binary itself into
 # /opt/homebrew/bin; cargo/rustc/etc. stay in the keg-only opt dir (to avoid
 # clashing with the separate `rust` formula). So `command -v rustup` alone
