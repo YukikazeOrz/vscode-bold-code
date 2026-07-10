@@ -1,0 +1,153 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+index c4daadb..bad0c28 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+@@ -20,11 +20,81 @@ import { AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, I
+ type AiHubDrawerKind = 'settings' | 'gateway';
+ 
+ const DRAWER_TRANSITION_MS = 180;
++const AI_GATEWAY_IMPORT_CALLBACK_URL = 'vscode://ai-gateway/import';
++const API_KEY_PARAM_NAMES = ['api_key', 'apiKey', 'openai_api_key', 'OPENAI_API_KEY'];
++const IMPORT_ONLY_KEY_PARAM_NAMES = ['key', 'token', 'access_token'];
++const BASE_URL_PARAM_NAMES = ['base_url', 'baseUrl', 'openai_base_url', 'OPENAI_BASE_URL'];
+ 
+ function parseAiHubMode(value: unknown): AiHubMode {
+ 	return value === 'claudeAgent' || value === 'codexAgent' ? value : 'edit';
+ }
+ 
++function appendGatewayImportParameters(gatewayUrl: string): string {
++	try {
++		const url = new URL(gatewayUrl);
++		url.searchParams.set('ai_hub_import', '1');
++		url.searchParams.set('vscode_import_callback', AI_GATEWAY_IMPORT_CALLBACK_URL);
++		url.searchParams.set('import_callback', AI_GATEWAY_IMPORT_CALLBACK_URL);
++		return url.toString();
++	} catch {
++		return gatewayUrl;
++	}
++}
++
++function getHashParams(url: URL): URLSearchParams {
++	const hash = url.hash.replace(/^#/, '');
++	if (!hash) {
++		return new URLSearchParams();
++	}
++
++	const queryStart = hash.indexOf('?');
++	return new URLSearchParams(queryStart >= 0 ? hash.slice(queryStart + 1) : hash);
++}
++
++function getFirstParam(searchParams: readonly URLSearchParams[], names: readonly string[]): string | undefined {
++	for (const params of searchParams) {
++		for (const name of names) {
++			const value = params.get(name)?.trim();
++			if (value) {
++				return value;
++			}
++		}
++	}
++	return undefined;
++}
++
++function inferGatewayApiBaseUrl(gatewayUrl: string): string {
++	try {
++		return new URL('/v1', gatewayUrl).toString().replace(/\/$/, '');
++	} catch {
++		return '';
++	}
++}
++
++function parseGatewayImportedKey(navigatedUrl: string, gatewayUrl: string): { apiKey: string; baseUrl: string } | undefined {
++	let url: URL;
++	try {
++		url = new URL(navigatedUrl);
++	} catch {
++		return undefined;
++	}
++
++	const params = [url.searchParams, getHashParams(url)];
++	const importRoute = `${url.host}${url.pathname}`.toLowerCase().includes('ai-gateway/import')
++		|| url.searchParams.get('ai_hub_import') === '1'
++		|| url.searchParams.get('import_api_key') === '1';
++	const apiKey = getFirstParam(params, API_KEY_PARAM_NAMES)
++		?? (importRoute ? getFirstParam(params, IMPORT_ONLY_KEY_PARAM_NAMES) : undefined);
++	if (!apiKey || apiKey.length < 8) {
++		return undefined;
++	}
++
++	return {
++		apiKey,
++		baseUrl: getFirstParam(params, BASE_URL_PARAM_NAMES) ?? inferGatewayApiBaseUrl(gatewayUrl),
++	};
++}
++
+ export class AiHubDrawerService extends Disposable implements IAiHubDrawerService {
+ 
+ 	declare readonly _serviceBrand: undefined;
+@@ -35,8 +105,10 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 	private readonly settingsRoot: ShadowRoot;
+ 	private readonly gatewayHost: HTMLElement;
+ 	private readonly settingsDomDisposables = this._register(new DisposableStore());
++	private readonly gatewayDisposables = this._register(new DisposableStore());
+ 	private gatewayModel: IBrowserViewModel | undefined;
+ 	private activeDrawer: AiHubDrawerKind | undefined;
++	private lastImportedGatewayUrl: string | undefined;
+ 	private operationId = 0;
+ 
+ 	constructor(
+@@ -179,12 +251,13 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 			this.settingsRoot.replaceChildren();
+ 		}
+ 		if (this.activeDrawer === 'gateway' && this.gatewayModel) {
++			this.gatewayDisposables.clear();
+ 			await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway drawer', error));
+ 		}
+ 	}
+ 
+ 	private async showGateway(operationId: number): Promise<void> {
+-		const gatewayUrl = this.productService.aiGatewayUrl ?? '';
++		const gatewayUrl = appendGatewayImportParameters(this.productService.aiGatewayUrl ?? '');
+ 		const input = this.browserViewService.getOrCreateLazy('ai-gateway-drawer', {
+ 			url: gatewayUrl,
+ 			title: localize('aiHub.gatewayTitle', "AI Gateway"),
+@@ -200,11 +273,40 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		}
+ 
+ 		this.gatewayModel = model;
++		this.hookGatewayImport(model, gatewayUrl);
+ 		await this.layoutGateway();
+ 		await model.setVisible(true);
+ 		await this.layoutGateway();
+ 	}
+ 
++	private hookGatewayImport(model: IBrowserViewModel, gatewayUrl: string): void {
++		this.gatewayDisposables.clear();
++		this.gatewayDisposables.add(model.onDidNavigate(event => void this.importGatewayApiKey(event.url, gatewayUrl)));
++		this.gatewayDisposables.add(model.onDidChangeLoadingState(event => {
++			if (event.error?.url) {
++				void this.importGatewayApiKey(event.error.url, gatewayUrl);
++			}
++		}));
++		if (model.url) {
++			void this.importGatewayApiKey(model.url, gatewayUrl);
++		}
++	}
++
++	private async importGatewayApiKey(navigatedUrl: string, gatewayUrl: string): Promise<void> {
++		if (navigatedUrl === this.lastImportedGatewayUrl) {
++			return;
++		}
++
++		const imported = parseGatewayImportedKey(navigatedUrl, gatewayUrl);
++		if (!imported) {
++			return;
++		}
++
++		this.lastImportedGatewayUrl = navigatedUrl;
++		await this.aiConfigService.saveCodexSettings({ baseUrl: imported.baseUrl, apiKey: imported.apiKey });
++		this.notificationService.info(localize('aiHub.gatewayKeyImported', "AI Gateway API Key 已导入 Codex。"));
++	}
++
+ 	private async layoutGateway(): Promise<void> {
+ 		if (!this.gatewayModel || this.activeDrawer !== 'gateway') {
+ 			return;
