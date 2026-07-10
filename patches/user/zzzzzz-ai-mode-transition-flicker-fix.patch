@@ -1,0 +1,117 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index aa99f1c..e9126ce 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -15,8 +15,8 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
+ import { AiHubMode, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ 
+ const AI_HUB_LAYOUT_STORAGE_KEY = 'aiHub.editModeLayout';
+-const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar', 'claude-sidebar-secondary'];
+-const CODEX_AGENT_CONTAINER_IDS = ['codexViewContainer', 'codexSecondaryViewContainer'];
++const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar-secondary', 'claude-sidebar'];
++const CODEX_AGENT_CONTAINER_IDS = ['codexSecondaryViewContainer', 'codexViewContainer'];
+ 
+ interface IAiHubLayoutSnapshot {
+ 	readonly activityBarVisible: boolean;
+@@ -34,6 +34,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 
+ 	private currentMode: AiHubMode = 'edit';
+ 	private initialization: Promise<void> | undefined;
++	private modeTransition: Promise<void> = Promise.resolve();
+ 	private applyingLayout = false;
+ 	private readonly enforcementScheduler = this._register(new RunOnceScheduler(() => void this.enforceAgentLayout(), 0));
+ 
+@@ -84,7 +85,13 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		}
+ 	}
+ 
+-	async setMode(mode: AiHubMode): Promise<void> {
++	setMode(mode: AiHubMode): Promise<void> {
++		const transition = this.modeTransition.then(() => this.doSetMode(mode));
++		this.modeTransition = transition.then(() => undefined, () => undefined);
++		return transition;
++	}
++
++	private async doSetMode(mode: AiHubMode): Promise<void> {
+ 		await this.initialize();
+ 		const previousMode = this.currentMode;
+ 		if (mode === previousMode) {
+@@ -96,10 +103,18 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			this.storageService.store(AI_HUB_LAYOUT_STORAGE_KEY, JSON.stringify(this.captureEditLayout()), StorageScope.PROFILE, StorageTarget.USER);
+ 		}
+ 
+-		this.currentMode = mode;
+ 		this.applyingLayout = true;
+ 		try {
+-			await this.aiConfigService.setMode(mode);
++			if (mode === 'edit') {
++				// Keep enforcing the current Agent layout while extension enablement changes.
++				// The final edit layout is then restored synchronously in one render turn.
++				await this.aiConfigService.setMode(mode);
++				this.currentMode = mode;
++			} else {
++				this.currentMode = mode;
++				this.prepareAgentSurface();
++				await this.aiConfigService.setMode(mode);
++			}
+ 			await this.applyModeLayout(mode, previousMode);
+ 		} catch (error) {
+ 			this.currentMode = previousMode;
+@@ -173,33 +188,31 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		this.layoutService.setPartHidden(!snapshot.activityBarVisible, Parts.ACTIVITYBAR_PART);
+ 		this.layoutService.setPartHidden(!snapshot.editorVisible, Parts.EDITOR_PART);
+ 		this.layoutService.setPartHidden(!snapshot.panelVisible, Parts.PANEL_PART);
++		this.layoutService.setPartHidden(!snapshot.sideBarVisible, Parts.SIDEBAR_PART);
++		this.layoutService.setPartHidden(!snapshot.auxiliaryBarVisible, Parts.AUXILIARYBAR_PART);
++		this.layoutService.layout();
+ 
+-		if (snapshot.sideBarVisible) {
+-			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
+-			if (snapshot.sideBarContainerId) {
+-				await this.viewsService.openViewContainer(snapshot.sideBarContainerId, false);
+-			}
+-		} else {
+-			this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
++		if (snapshot.sideBarVisible && snapshot.sideBarContainerId) {
++			await this.viewsService.openViewContainer(snapshot.sideBarContainerId, false);
+ 		}
+-
+-		if (snapshot.auxiliaryBarVisible) {
+-			this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+-			if (snapshot.auxiliaryBarContainerId) {
+-				await this.viewsService.openViewContainer(snapshot.auxiliaryBarContainerId, false);
+-			}
+-		} else {
+-			this.layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
++		if (snapshot.auxiliaryBarVisible && snapshot.auxiliaryBarContainerId) {
++			await this.viewsService.openViewContainer(snapshot.auxiliaryBarContainerId, false);
+ 		}
+ 
+ 		this.storageService.remove(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
++		this.layoutService.layout();
+ 	}
+ 
+-	private async applyAgentLayout(mode: AiHubMode): Promise<void> {
+-		this.layoutService.setAuxiliaryBarMaximized(false);
+-		this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
++	private prepareAgentSurface(): void {
++		this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+ 		this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++		this.layoutService.setAuxiliaryBarMaximized(true);
+ 		this.hideForbiddenParts();
++		this.layoutService.layout();
++	}
++
++	private async applyAgentLayout(mode: AiHubMode): Promise<void> {
++		this.prepareAgentSurface();
+ 
+ 		try {
+ 			await this.commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
+@@ -207,6 +220,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			this.logService.warn('[aiHub] failed to open agent sidebar via extension command', error);
+ 		}
+ 
++		this.prepareAgentSurface();
+ 		await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode));
+ 		if (!this.arrangeAgentContainer(mode)) {
+ 			this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
