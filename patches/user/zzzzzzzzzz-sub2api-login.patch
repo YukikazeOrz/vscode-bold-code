@@ -1,0 +1,689 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+index 07eeb6e7f7a..f76baf19443 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+@@ -18,6 +18,15 @@ import { IBrowserViewModel, IBrowserViewWorkbenchService } from '../../browserVi
+ import { AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController } from './aiHubTypes.js';
+ 
+ type AiHubDrawerKind = 'settings' | 'gateway';
++type Sub2ApiSessionStatus = 'authenticated' | 'noKey' | 'signedOut' | 'twoFactor' | 'error';
++
++interface ISub2ApiScriptResult {
++	readonly status: Sub2ApiSessionStatus;
++	readonly apiKey?: string;
++	readonly message?: string;
++	readonly tempToken?: string;
++	readonly userEmailMasked?: string;
++}
+ 
+ const DRAWER_TRANSITION_MS = 180;
+ const SUB2API_IMPORT_POLL_MS = 2000;
+@@ -25,25 +34,166 @@ const AI_GATEWAY_IMPORT_CALLBACK_URL = 'vscode://ai-gateway/import';
+ const API_KEY_PARAM_NAMES = ['api_key', 'apiKey', 'openai_api_key', 'OPENAI_API_KEY'];
+ const IMPORT_ONLY_KEY_PARAM_NAMES = ['key', 'token', 'access_token'];
+ const BASE_URL_PARAM_NAMES = ['base_url', 'baseUrl', 'openai_base_url', 'OPENAI_BASE_URL'];
+-const SUB2API_READ_API_KEY_SCRIPT = `(() => {
+-	const authToken = window.localStorage.getItem('auth_token');
+-	if (!authToken) {
+-		return undefined;
+-	}
+-	return window.fetch('/api/v1/keys?page=1&page_size=100&status=active&sort_by=created_at&sort_order=desc', {
++const SUB2API_SESSION_SCRIPT = `(async () => {
++	const storage = window.localStorage;
++	const clearAuth = () => {
++		storage.removeItem('auth_token');
++		storage.removeItem('refresh_token');
++		storage.removeItem('auth_user');
++		storage.removeItem('token_expires_at');
++	};
++	const unwrap = payload => payload && typeof payload.code === 'number'
++		? (payload.code === 0 ? payload.data : undefined)
++		: payload;
++	const readPayload = async response => {
++		try { return await response.json(); } catch { return undefined; }
++	};
++	const requestKeys = token => window.fetch('/api/v1/keys?page=1&page_size=100&status=active&sort_by=created_at&sort_order=desc', {
+ 		credentials: 'include',
+-		headers: { Authorization: 'Bearer ' + authToken }
+-	}).then(response => response.ok ? response.json() : undefined).then(payload => {
+-		if (!payload || (typeof payload.code === 'number' && payload.code !== 0)) {
+-			return undefined;
++		headers: { Authorization: 'Bearer ' + token }
++	});
++
++	try {
++		let authToken = storage.getItem('auth_token');
++		if (!authToken) {
++			return { status: 'signedOut' };
+ 		}
+-		const data = typeof payload.code === 'number' ? payload.data : payload;
++
++		let response = await requestKeys(authToken);
++		if (response.status === 401) {
++			const refreshToken = storage.getItem('refresh_token');
++			if (!refreshToken) {
++				clearAuth();
++				return { status: 'signedOut' };
++			}
++			const refreshResponse = await window.fetch('/api/v1/auth/refresh', {
++				method: 'POST',
++				credentials: 'include',
++				headers: { 'Content-Type': 'application/json' },
++				body: JSON.stringify({ refresh_token: refreshToken })
++			});
++			const refreshPayload = await readPayload(refreshResponse);
++			const refreshed = unwrap(refreshPayload);
++			if (!refreshResponse.ok || typeof refreshed?.access_token !== 'string') {
++				clearAuth();
++				return { status: 'signedOut' };
++			}
++			authToken = refreshed.access_token;
++			storage.setItem('auth_token', authToken);
++			if (typeof refreshed.refresh_token === 'string') {
++				storage.setItem('refresh_token', refreshed.refresh_token);
++			}
++			if (typeof refreshed.expires_in === 'number') {
++				storage.setItem('token_expires_at', String(Date.now() + refreshed.expires_in * 1000));
++			}
++			response = await requestKeys(authToken);
++		}
++
++		const payload = await readPayload(response);
++		if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) {
++			return { status: response.status === 401 ? 'signedOut' : 'error', message: payload?.message || '读取 API Key 失败' };
++		}
++		const data = unwrap(payload);
+ 		const items = Array.isArray(data?.items) ? data.items : [];
+ 		const item = items.find(candidate => candidate?.status === 'active' && typeof candidate?.key === 'string' && candidate.key.trim().length >= 8);
+-		return item ? { apiKey: item.key.trim() } : undefined;
+-	}).catch(() => undefined);
++		return item ? { status: 'authenticated', apiKey: item.key.trim() } : { status: 'noKey' };
++	} catch (error) {
++		return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' };
++	}
+ })()`;
+ 
++function buildSub2ApiLoginScript(email: string, password: string): string {
++	const credentials = JSON.stringify({ email, password });
++	return `(async () => {
++		try {
++			const response = await window.fetch('/api/v1/auth/login', {
++				method: 'POST',
++				credentials: 'include',
++				headers: { 'Content-Type': 'application/json' },
++				body: JSON.stringify(${credentials})
++			});
++			let payload;
++			try { payload = await response.json(); } catch { payload = undefined; }
++			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) {
++				return { status: 'error', message: payload?.message || '登录失败' };
++			}
++			const data = payload && typeof payload.code === 'number' ? payload.data : payload;
++			if (data?.requires_2fa === true && typeof data.temp_token === 'string') {
++				return { status: 'twoFactor', tempToken: data.temp_token, userEmailMasked: data.user_email_masked };
++			}
++			if (typeof data?.access_token !== 'string') {
++				return { status: 'error', message: '登录响应中没有访问令牌' };
++			}
++			window.localStorage.setItem('auth_token', data.access_token);
++			if (typeof data.refresh_token === 'string') {
++				window.localStorage.setItem('refresh_token', data.refresh_token);
++			}
++			if (typeof data.expires_in === 'number') {
++				window.localStorage.setItem('token_expires_at', String(Date.now() + data.expires_in * 1000));
++			}
++			if (data.user) {
++				window.localStorage.setItem('auth_user', JSON.stringify(data.user));
++			}
++			return { status: 'authenticated' };
++		} catch (error) {
++			return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' };
++		}
++	})()`;
++}
++
++function buildSub2ApiTwoFactorScript(tempToken: string, totpCode: string): string {
++	const request = JSON.stringify({ temp_token: tempToken, totp_code: totpCode });
++	return `(async () => {
++		try {
++			const response = await window.fetch('/api/v1/auth/login/2fa', {
++				method: 'POST',
++				credentials: 'include',
++				headers: { 'Content-Type': 'application/json' },
++				body: JSON.stringify(${request})
++			});
++			let payload;
++			try { payload = await response.json(); } catch { payload = undefined; }
++			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) {
++				return { status: 'error', message: payload?.message || '验证码错误' };
++			}
++			const data = payload && typeof payload.code === 'number' ? payload.data : payload;
++			if (typeof data?.access_token !== 'string') {
++				return { status: 'error', message: '登录响应中没有访问令牌' };
++			}
++			window.localStorage.setItem('auth_token', data.access_token);
++			if (typeof data.refresh_token === 'string') {
++				window.localStorage.setItem('refresh_token', data.refresh_token);
++			}
++			if (typeof data.expires_in === 'number') {
++				window.localStorage.setItem('token_expires_at', String(Date.now() + data.expires_in * 1000));
++			}
++			if (data.user) {
++				window.localStorage.setItem('auth_user', JSON.stringify(data.user));
++			}
++			return { status: 'authenticated' };
++		} catch (error) {
++			return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' };
++		}
++	})()`;
++}
++
++function parseSub2ApiScriptResult(value: unknown): ISub2ApiScriptResult | undefined {
++	if (!value || typeof value !== 'object') {
++		return undefined;
++	}
++	const candidate = value as Record<string, unknown>;
++	if (candidate.status !== 'authenticated' && candidate.status !== 'noKey' && candidate.status !== 'signedOut' && candidate.status !== 'twoFactor' && candidate.status !== 'error') {
++		return undefined;
++	}
++	return {
++		status: candidate.status,
++		apiKey: typeof candidate.apiKey === 'string' && candidate.apiKey.trim().length >= 8 ? candidate.apiKey.trim() : undefined,
++		message: typeof candidate.message === 'string' ? candidate.message : undefined,
++		tempToken: typeof candidate.tempToken === 'string' ? candidate.tempToken : undefined,
++		userEmailMasked: typeof candidate.userEmailMasked === 'string' ? candidate.userEmailMasked : undefined,
++	};
++}
++
+ function parseAiHubMode(value: unknown): AiHubMode {
+ 	return value === 'claudeAgent' || value === 'codexAgent' ? value : 'edit';
+ }
+@@ -131,9 +281,13 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 	private readonly settingsHost: HTMLElement;
+ 	private readonly settingsRoot: ShadowRoot;
+ 	private readonly gatewayHost: HTMLElement;
++	private readonly gatewayRoot: ShadowRoot;
+ 	private readonly settingsDomDisposables = this._register(new DisposableStore());
++	private readonly gatewayDomDisposables = this._register(new DisposableStore());
+ 	private readonly gatewayDisposables = this._register(new DisposableStore());
+ 	private gatewayModel: IBrowserViewModel | undefined;
++	private gatewayBrowserVisible = false;
++	private gatewayWaitingForKey = false;
+ 	private activeDrawer: AiHubDrawerKind | undefined;
+ 	private lastImportedGatewayUrl: string | undefined;
+ 	private lastImportedApiKey: string | undefined;
+@@ -173,6 +327,7 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		this.settingsHost = $('.ai-hub-drawer-content.ai-hub-drawer-settings');
+ 		this.settingsRoot = this.settingsHost.attachShadow({ mode: 'open' });
+ 		this.gatewayHost = $('.ai-hub-drawer-content.ai-hub-drawer-gateway');
++		this.gatewayRoot = this.gatewayHost.attachShadow({ mode: 'open' });
+ 		body.append(this.settingsHost, this.gatewayHost);
+ 		this.container.appendChild(body);
+ 
+@@ -280,9 +435,15 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 			this.settingsDomDisposables.clear();
+ 			this.settingsRoot.replaceChildren();
+ 		}
+-		if (this.activeDrawer === 'gateway' && this.gatewayModel) {
++		if (this.activeDrawer === 'gateway') {
++			this.gatewayDomDisposables.clear();
++			this.gatewayRoot.replaceChildren();
+ 			this.gatewayDisposables.clear();
+-			await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway drawer', error));
++			this.gatewayBrowserVisible = false;
++			this.gatewayWaitingForKey = false;
++			if (this.gatewayModel) {
++				await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway drawer', error));
++			}
+ 		}
+ 	}
+ 
+@@ -303,10 +464,14 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		}
+ 
+ 		this.gatewayModel = model;
++		this.gatewayBrowserVisible = false;
++		this.gatewayWaitingForKey = false;
+ 		this.hookGatewayImport(model, gatewayUrl);
+-		await this.layoutGateway();
+-		await model.setVisible(true);
+-		await this.layoutGateway();
++		await model.setVisible(false);
++		this.renderGatewayLoading(localize('aiHub.gatewayCheckingSession', "正在检查登录状态..."));
++		if (!model.loading) {
++			await this.refreshSub2ApiSession(model, gatewayUrl);
++		}
+ 	}
+ 
+ 	private hookGatewayImport(model: IBrowserViewModel, gatewayUrl: string): void {
+@@ -314,44 +479,68 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		this.gatewayApiKeyImported = false;
+ 		this.gatewayDisposables.add(model.onDidNavigate(event => {
+ 			void this.importGatewayApiKey(event.url, gatewayUrl);
+-			void this.importSub2ApiKey(model, gatewayUrl);
++			if (this.gatewayWaitingForKey) {
++				void this.refreshSub2ApiSession(model, gatewayUrl);
++			}
+ 		}));
+ 		this.gatewayDisposables.add(model.onDidChangeLoadingState(event => {
+ 			if (event.error?.url) {
+ 				void this.importGatewayApiKey(event.error.url, gatewayUrl);
+ 			}
+-			if (!event.loading) {
+-				void this.importSub2ApiKey(model, gatewayUrl);
++			if (!event.loading && (this.gatewayWaitingForKey || !this.gatewayBrowserVisible)) {
++				void this.refreshSub2ApiSession(model, gatewayUrl);
+ 			}
+ 		}));
+-		const importTimer = mainWindow.setInterval(() => void this.importSub2ApiKey(model, gatewayUrl), SUB2API_IMPORT_POLL_MS);
++		const importTimer = mainWindow.setInterval(() => {
++			if (this.gatewayWaitingForKey) {
++				void this.refreshSub2ApiSession(model, gatewayUrl);
++			}
++		}, SUB2API_IMPORT_POLL_MS);
+ 		this.gatewayDisposables.add(toDisposable(() => mainWindow.clearInterval(importTimer)));
+ 		if (model.url) {
+ 			void this.importGatewayApiKey(model.url, gatewayUrl);
+-			if (!model.loading) {
+-				void this.importSub2ApiKey(model, gatewayUrl);
+-			}
+ 		}
+ 	}
+ 
+-	private async importSub2ApiKey(model: IBrowserViewModel, gatewayUrl: string): Promise<void> {
++	private async refreshSub2ApiSession(model: IBrowserViewModel, gatewayUrl: string): Promise<void> {
+ 		if (this.gatewayApiKeyImported || this.gatewayImportInProgress || model.loading || !hasSameOrigin(model.url, gatewayUrl)) {
+ 			return;
+ 		}
+ 
+ 		this.gatewayImportInProgress = true;
+ 		try {
+-			const result = await model.executeJavaScript(SUB2API_READ_API_KEY_SCRIPT);
+-			if (!result || typeof result !== 'object') {
++			const result = parseSub2ApiScriptResult(await model.executeJavaScript(SUB2API_SESSION_SCRIPT));
++			if (!result || this.activeDrawer !== 'gateway') {
+ 				return;
+ 			}
+-			const apiKey = (result as { apiKey?: unknown }).apiKey;
+-			if (typeof apiKey !== 'string' || apiKey.trim().length < 8) {
+-				return;
++
++			switch (result.status) {
++				case 'authenticated':
++					if (result.apiKey) {
++						await this.saveImportedGatewayApiKey({ apiKey: result.apiKey, baseUrl: inferGatewayApiBaseUrl(gatewayUrl) });
++					}
++					break;
++				case 'noKey':
++					if (!this.gatewayBrowserVisible) {
++						this.renderGatewayNoKey(gatewayUrl);
++					}
++					break;
++				case 'signedOut':
++					if (!this.gatewayBrowserVisible) {
++						this.renderGatewayLogin(gatewayUrl);
++					}
++					break;
++				case 'error':
++					if (!this.gatewayBrowserVisible) {
++						this.renderGatewayLogin(gatewayUrl, result.message ?? localize('aiHub.gatewayConnectionFailed', "无法连接 AI Gateway。"));
++					}
++					break;
+ 			}
+-			await this.saveImportedGatewayApiKey({ apiKey: apiKey.trim(), baseUrl: inferGatewayApiBaseUrl(gatewayUrl) });
+ 		} catch (error) {
+-			this.logService.trace('[aiHub] Sub2API key is not available yet', error);
++			this.logService.trace('[aiHub] failed to read Sub2API session', error);
++			if (!this.gatewayBrowserVisible && this.activeDrawer === 'gateway') {
++				this.renderGatewayLogin(gatewayUrl, localize('aiHub.gatewayConnectionFailed', "无法连接 AI Gateway。"));
++			}
+ 		} finally {
+ 			this.gatewayImportInProgress = false;
+ 		}
+@@ -374,17 +563,344 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 	private async saveImportedGatewayApiKey(imported: { apiKey: string; baseUrl: string }): Promise<void> {
+ 		if (imported.apiKey === this.lastImportedApiKey) {
+ 			this.gatewayApiKeyImported = true;
++			await this.showGatewayConnected(imported.apiKey);
+ 			return;
+ 		}
+ 
+ 		await this.aiConfigService.saveCodexSettings({ baseUrl: imported.baseUrl, apiKey: imported.apiKey });
+ 		this.lastImportedApiKey = imported.apiKey;
+ 		this.gatewayApiKeyImported = true;
++		await this.showGatewayConnected(imported.apiKey);
+ 		this.notificationService.info(localize('aiHub.gatewayKeyImported', "AI Gateway API Key 已导入 Codex。"));
+ 	}
+ 
++	private createGatewayPanel(title: string, description: string, message?: string): { card: HTMLElement; actions: HTMLElement; status: HTMLElement } {
++		const document = mainWindow.document;
++		this.gatewayDomDisposables.clear();
++		const style = document.createElement('style');
++		style.textContent = `
++			:host { display: block; box-sizing: border-box; height: 100%; overflow: auto; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
++			.surface { display: flex; box-sizing: border-box; min-height: 100%; align-items: center; justify-content: center; padding: 28px; }
++			.panel { width: min(100%, 380px); box-sizing: border-box; padding: 24px; border: 1px solid var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-editorWidget-background); box-shadow: 0 8px 24px var(--vscode-widget-shadow); }
++			h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
++			.description { margin: 0 0 20px; font-size: 12px; line-height: 1.6; opacity: .8; }
++			label { display: block; margin: 0 0 5px; font-size: 12px; }
++			input { width: 100%; box-sizing: border-box; margin: 0 0 14px; padding: 8px 10px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; }
++			input:focus { border-color: var(--vscode-focusBorder); }
++			.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
++			button { min-height: 30px; padding: 6px 14px; cursor: pointer; color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: none; border-radius: 3px; }
++			button:hover { background: var(--vscode-button-hoverBackground); }
++			button.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
++			button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
++			button:disabled { cursor: default; opacity: .6; }
++			.status { min-height: 18px; margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--vscode-errorForeground); }
++			.key-status { margin: 16px 0 0; padding: 10px 12px; border-radius: 4px; background: var(--vscode-textBlockQuote-background); font-family: var(--vscode-editor-font-family); font-size: 12px; }
++		`;
++
++		const card = document.createElement('div');
++		card.className = 'panel';
++		const surface = document.createElement('div');
++		surface.className = 'surface';
++		const heading = document.createElement('h2');
++		heading.textContent = title;
++		const descriptionElement = document.createElement('p');
++		descriptionElement.className = 'description';
++		descriptionElement.textContent = description;
++		const actions = document.createElement('div');
++		actions.className = 'actions';
++		const status = document.createElement('div');
++		status.className = 'status';
++		status.setAttribute('role', 'status');
++		status.setAttribute('aria-live', 'polite');
++		status.textContent = message ?? '';
++		card.append(heading, descriptionElement);
++		surface.appendChild(card);
++		this.gatewayRoot.replaceChildren(style, surface);
++		return { card, actions, status };
++	}
++
++	private renderGatewayLoading(message: string): void {
++		const { card, status } = this.createGatewayPanel(
++			localize('aiHub.gatewayLoginTitle', "登录 AI Gateway"),
++			localize('aiHub.gatewayConnectingDescription', "正在安全连接 Sub2API 中转站。")
++		);
++		status.style.color = 'var(--vscode-descriptionForeground)';
++		status.textContent = message;
++		card.appendChild(status);
++	}
++
++	private renderGatewayLogin(gatewayUrl: string, message?: string): void {
++		this.gatewayBrowserVisible = false;
++		this.gatewayWaitingForKey = false;
++		this.gatewayApiKeyImported = false;
++		const document = mainWindow.document;
++		const { card, actions, status } = this.createGatewayPanel(
++			localize('aiHub.gatewayLoginTitle', "登录 AI Gateway"),
++			localize('aiHub.gatewayLoginDescription', "登录 Sub2API 后将静默读取可用 API Key，并自动保存到 AI Setting。"),
++			message
++		);
++		const form = document.createElement('form');
++		const emailLabel = document.createElement('label');
++		emailLabel.htmlFor = 'sub2ApiEmail';
++		emailLabel.textContent = localize('aiHub.gatewayEmail', "邮箱");
++		const emailInput = document.createElement('input');
++		emailInput.id = 'sub2ApiEmail';
++		emailInput.type = 'email';
++		emailInput.autocomplete = 'username';
++		emailInput.required = true;
++		const passwordLabel = document.createElement('label');
++		passwordLabel.htmlFor = 'sub2ApiPassword';
++		passwordLabel.textContent = localize('aiHub.gatewayPassword', "密码");
++		const passwordInput = document.createElement('input');
++		passwordInput.id = 'sub2ApiPassword';
++		passwordInput.type = 'password';
++		passwordInput.autocomplete = 'current-password';
++		passwordInput.required = true;
++		const submitButton = document.createElement('button');
++		submitButton.type = 'submit';
++		submitButton.textContent = localize('aiHub.gatewayLogin', "登录并导入");
++		const webLoginButton = document.createElement('button');
++		webLoginButton.type = 'button';
++		webLoginButton.className = 'secondary';
++		webLoginButton.textContent = localize('aiHub.gatewayWebLogin', "使用网页登录");
++		actions.append(submitButton, webLoginButton);
++		form.append(emailLabel, emailInput, passwordLabel, passwordInput, actions, status);
++		card.appendChild(form);
++
++		this.gatewayDomDisposables.add(addDisposableListener(form, EventType.SUBMIT, event => {
++			event.preventDefault();
++			const email = emailInput.value.trim();
++			const password = passwordInput.value;
++			if (!email || !password) {
++				status.textContent = localize('aiHub.gatewayCredentialsRequired', "请输入邮箱和密码。");
++				return;
++			}
++			submitButton.disabled = true;
++			status.style.color = 'var(--vscode-descriptionForeground)';
++			status.textContent = localize('aiHub.gatewayLoggingIn', "正在登录...");
++			void this.loginSub2Api(gatewayUrl, email, password);
++		}));
++		this.gatewayDomDisposables.add(addDisposableListener(webLoginButton, EventType.CLICK, () => {
++			void this.openGatewayPage('/login?redirect=/keys', gatewayUrl, true);
++		}));
++		mainWindow.setTimeout(() => emailInput.focus(), 0);
++	}
++
++	private renderGatewayTwoFactor(gatewayUrl: string, tempToken: string, userEmailMasked?: string, message?: string): void {
++		const document = mainWindow.document;
++		const description = userEmailMasked
++			? localize('aiHub.gatewayTwoFactorDescriptionWithEmail', "请输入 {0} 的六位验证码。", userEmailMasked)
++			: localize('aiHub.gatewayTwoFactorDescription', "请输入六位双重验证代码。");
++		const { card, actions, status } = this.createGatewayPanel(localize('aiHub.gatewayTwoFactorTitle', "双重验证"), description, message);
++		const form = document.createElement('form');
++		const codeLabel = document.createElement('label');
++		codeLabel.htmlFor = 'sub2ApiTotpCode';
++		codeLabel.textContent = localize('aiHub.gatewayTwoFactorCode', "验证码");
++		const codeInput = document.createElement('input');
++		codeInput.id = 'sub2ApiTotpCode';
++		codeInput.type = 'text';
++		codeInput.inputMode = 'numeric';
++		codeInput.autocomplete = 'one-time-code';
++		codeInput.maxLength = 6;
++		codeInput.pattern = '[0-9]{6}';
++		codeInput.required = true;
++		const submitButton = document.createElement('button');
++		submitButton.type = 'submit';
++		submitButton.textContent = localize('aiHub.gatewayVerifyAndImport', "验证并导入");
++		const backButton = document.createElement('button');
++		backButton.type = 'button';
++		backButton.className = 'secondary';
++		backButton.textContent = localize('aiHub.gatewayBackToLogin', "返回登录");
++		actions.append(submitButton, backButton);
++		form.append(codeLabel, codeInput, actions, status);
++		card.appendChild(form);
++
++		this.gatewayDomDisposables.add(addDisposableListener(form, EventType.SUBMIT, event => {
++			event.preventDefault();
++			const code = codeInput.value.trim();
++			if (!/^\d{6}$/.test(code)) {
++				status.textContent = localize('aiHub.gatewayTwoFactorCodeRequired', "请输入六位数字验证码。");
++				return;
++			}
++			submitButton.disabled = true;
++			status.style.color = 'var(--vscode-descriptionForeground)';
++			status.textContent = localize('aiHub.gatewayVerifying', "正在验证...");
++			void this.loginSub2ApiTwoFactor(gatewayUrl, tempToken, code, userEmailMasked);
++		}));
++		this.gatewayDomDisposables.add(addDisposableListener(backButton, EventType.CLICK, () => this.renderGatewayLogin(gatewayUrl)));
++		mainWindow.setTimeout(() => codeInput.focus(), 0);
++	}
++
++	private renderGatewayNoKey(gatewayUrl: string, message?: string): void {
++		this.gatewayBrowserVisible = false;
++		this.gatewayWaitingForKey = false;
++		const document = mainWindow.document;
++		const { card, actions, status } = this.createGatewayPanel(
++			localize('aiHub.gatewayNoKeyTitle', "尚未创建 API Key"),
++			localize('aiHub.gatewayNoKeyDescription', "登录成功，但账户中没有可用 Key。请先创建 Key，创建完成后会自动导入。"),
++			message
++		);
++		const createButton = document.createElement('button');
++		createButton.type = 'button';
++		createButton.textContent = localize('aiHub.gatewayCreateKey', "创建 Key");
++		const retryButton = document.createElement('button');
++		retryButton.type = 'button';
++		retryButton.className = 'secondary';
++		retryButton.textContent = localize('aiHub.gatewayRetryKey', "重新检测");
++		const switchAccountButton = document.createElement('button');
++		switchAccountButton.type = 'button';
++		switchAccountButton.className = 'secondary';
++		switchAccountButton.textContent = localize('aiHub.gatewaySwitchAccount', "切换账号");
++		actions.append(createButton, retryButton, switchAccountButton);
++		card.append(actions, status);
++		this.gatewayDomDisposables.add(addDisposableListener(createButton, EventType.CLICK, () => void this.openGatewayPage('/keys', gatewayUrl, true)));
++		this.gatewayDomDisposables.add(addDisposableListener(retryButton, EventType.CLICK, () => {
++			if (this.gatewayModel) {
++				this.renderGatewayLoading(localize('aiHub.gatewayCheckingKey', "正在检查 API Key..."));
++				void this.refreshSub2ApiSession(this.gatewayModel, gatewayUrl);
++			}
++		}));
++		this.gatewayDomDisposables.add(addDisposableListener(switchAccountButton, EventType.CLICK, () => void this.signOutSub2Api(gatewayUrl)));
++	}
++
++	private async showGatewayConnected(apiKey: string): Promise<void> {
++		this.gatewayBrowserVisible = false;
++		this.gatewayWaitingForKey = false;
++		if (this.gatewayModel) {
++			await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway after import', error));
++		}
++		if (this.activeDrawer !== 'gateway') {
++			return;
++		}
++		const document = mainWindow.document;
++		const { card, actions, status } = this.createGatewayPanel(
++			localize('aiHub.gatewayConnectedTitle', "AI Gateway 已连接"),
++			localize('aiHub.gatewayConnectedDescription', "API 地址和 Key 已自动保存到 AI Setting 的 Codex 配置。")
++		);
++		const keyStatus = document.createElement('div');
++		keyStatus.className = 'key-status';
++		keyStatus.textContent = apiKey.length > 8 ? `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}` : '••••••••';
++		const settingsButton = document.createElement('button');
++		settingsButton.type = 'button';
++		settingsButton.textContent = localize('aiHub.gatewayViewSettings', "查看 AI Setting");
++		const gatewayButton = document.createElement('button');
++		gatewayButton.type = 'button';
++		gatewayButton.className = 'secondary';
++		gatewayButton.textContent = localize('aiHub.gatewayOpenDashboard', "打开网关");
++		actions.append(settingsButton, gatewayButton);
++		status.style.color = 'var(--vscode-testing-iconPassed)';
++		status.textContent = localize('aiHub.gatewayImportComplete', "导入完成");
++		card.append(keyStatus, actions, status);
++		this.gatewayDomDisposables.add(addDisposableListener(settingsButton, EventType.CLICK, () => {
++			void (async () => {
++				await this.refreshSettings();
++				await this.show('settings');
++			})();
++		}));
++		this.gatewayDomDisposables.add(addDisposableListener(gatewayButton, EventType.CLICK, () => {
++			void this.openGatewayPage('/dashboard', this.productService.aiGatewayUrl ?? '', false);
++		}));
++	}
++
++	private async loginSub2Api(gatewayUrl: string, email: string, password: string): Promise<void> {
++		const model = this.gatewayModel;
++		if (!model || !hasSameOrigin(model.url, gatewayUrl)) {
++			this.renderGatewayLogin(gatewayUrl, localize('aiHub.gatewayLoginPageUnavailable', "AI Gateway 登录页尚未准备好，请稍后重试。"));
++			return;
++		}
++		this.renderGatewayLoading(localize('aiHub.gatewayLoggingIn', "正在登录..."));
++		try {
++			const result = parseSub2ApiScriptResult(await model.executeJavaScript(buildSub2ApiLoginScript(email, password)));
++			if (this.activeDrawer !== 'gateway') {
++				return;
++			}
++			if (result?.status === 'twoFactor' && result.tempToken) {
++				this.renderGatewayTwoFactor(gatewayUrl, result.tempToken, result.userEmailMasked);
++				return;
++			}
++			if (result?.status === 'authenticated') {
++				this.gatewayApiKeyImported = false;
++				await this.refreshSub2ApiSession(model, gatewayUrl);
++				return;
++			}
++			this.renderGatewayLogin(gatewayUrl, result?.message ?? localize('aiHub.gatewayLoginFailed', "登录失败，请检查账号和密码。"));
++		} catch (error) {
++			this.logService.warn('[aiHub] Sub2API login failed', error);
++			if (this.activeDrawer === 'gateway') {
++				this.renderGatewayLogin(gatewayUrl, localize('aiHub.gatewayLoginFailed', "登录失败，请检查账号和密码。"));
++			}
++		}
++	}
++
++	private async loginSub2ApiTwoFactor(gatewayUrl: string, tempToken: string, code: string, userEmailMasked?: string): Promise<void> {
++		const model = this.gatewayModel;
++		if (!model || !hasSameOrigin(model.url, gatewayUrl)) {
++			this.renderGatewayTwoFactor(gatewayUrl, tempToken, userEmailMasked, localize('aiHub.gatewayLoginPageUnavailable', "AI Gateway 登录页尚未准备好，请稍后重试。"));
++			return;
++		}
++		this.renderGatewayLoading(localize('aiHub.gatewayVerifying', "正在验证..."));
++		try {
++			const result = parseSub2ApiScriptResult(await model.executeJavaScript(buildSub2ApiTwoFactorScript(tempToken, code)));
++			if (this.activeDrawer !== 'gateway') {
++				return;
++			}
++			if (result?.status === 'authenticated') {
++				this.gatewayApiKeyImported = false;
++				await this.refreshSub2ApiSession(model, gatewayUrl);
++				return;
++			}
++			this.renderGatewayTwoFactor(gatewayUrl, tempToken, userEmailMasked, result?.message ?? localize('aiHub.gatewayInvalidTwoFactorCode', "验证码错误。"));
++		} catch (error) {
++			this.logService.warn('[aiHub] Sub2API two-factor login failed', error);
++			if (this.activeDrawer === 'gateway') {
++				this.renderGatewayTwoFactor(gatewayUrl, tempToken, userEmailMasked, localize('aiHub.gatewayInvalidTwoFactorCode', "验证码错误。"));
++			}
++		}
++	}
++
++	private async openGatewayPage(path: string, gatewayUrl: string, waitForKey: boolean): Promise<void> {
++		const model = this.gatewayModel;
++		if (!model || !gatewayUrl) {
++			return;
++		}
++		let targetUrl: string;
++		try {
++			targetUrl = new URL(path, gatewayUrl).toString();
++		} catch {
++			return;
++		}
++		this.gatewayDomDisposables.clear();
++		this.gatewayRoot.replaceChildren();
++		this.gatewayBrowserVisible = true;
++		this.gatewayWaitingForKey = waitForKey;
++		this.gatewayApiKeyImported = false;
++		await model.loadURL(targetUrl);
++		if (this.activeDrawer !== 'gateway') {
++			await model.setVisible(false);
++			return;
++		}
++		await this.layoutGateway();
++		await model.setVisible(true);
++		await this.layoutGateway();
++		await model.focus();
++	}
++
++	private async signOutSub2Api(gatewayUrl: string): Promise<void> {
++		if (this.gatewayModel && hasSameOrigin(this.gatewayModel.url, gatewayUrl)) {
++			await this.gatewayModel.executeJavaScript(`(() => {
++				window.localStorage.removeItem('auth_token');
++				window.localStorage.removeItem('refresh_token');
++				window.localStorage.removeItem('auth_user');
++				window.localStorage.removeItem('token_expires_at');
++			})()`);
++		}
++		this.gatewayApiKeyImported = false;
++		this.lastImportedApiKey = undefined;
++		this.renderGatewayLogin(gatewayUrl);
++	}
++
+ 	private async layoutGateway(): Promise<void> {
+-		if (!this.gatewayModel || this.activeDrawer !== 'gateway') {
++		if (!this.gatewayModel || !this.gatewayBrowserVisible || this.activeDrawer !== 'gateway') {
+ 			return;
+ 		}
+ 
+

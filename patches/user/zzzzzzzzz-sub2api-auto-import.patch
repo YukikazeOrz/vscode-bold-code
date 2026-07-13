@@ -1,0 +1,199 @@
+diff --git a/src/vs/platform/browserView/common/browserView.ts b/src/vs/platform/browserView/common/browserView.ts
+index 2c2669ae6a1..76fe65c06bc 100644
+--- a/src/vs/platform/browserView/common/browserView.ts
++++ b/src/vs/platform/browserView/common/browserView.ts
+@@ -511,6 +511,12 @@ export interface IBrowserViewService {
+ 	 */
+ 	getSelectedText(id: string): Promise<string>;
+ 
++	/**
++	 * Execute JavaScript in the browser view's main world and return a
++	 * JSON-serializable result. Intended for trusted workbench integrations.
++	 */
++	executeJavaScript(id: string, script: string): Promise<unknown>;
++
+ 	/**
+ 	 * Clear all storage data for the global browser session
+ 	 */
+diff --git a/src/vs/platform/browserView/electron-main/browserView.ts b/src/vs/platform/browserView/electron-main/browserView.ts
+index 15d04338ca4..eaab88af1c9 100644
+--- a/src/vs/platform/browserView/electron-main/browserView.ts
++++ b/src/vs/platform/browserView/electron-main/browserView.ts
+@@ -854,6 +854,10 @@ export class BrowserView extends Disposable {
+ 		}
+ 	}
+ 
++	async executeJavaScript(script: string): Promise<unknown> {
++		return this._view.webContents.executeJavaScript(script, true);
++	}
++
+ 	/**
+ 	 * Clear all storage data for this browser view's session
+ 	 */
+diff --git a/src/vs/platform/browserView/electron-main/browserViewMainService.ts b/src/vs/platform/browserView/electron-main/browserViewMainService.ts
+index 30f960b6bf4..5f975b87807 100644
+--- a/src/vs/platform/browserView/electron-main/browserViewMainService.ts
++++ b/src/vs/platform/browserView/electron-main/browserViewMainService.ts
+@@ -277,6 +277,10 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
+ 		return this._getBrowserView(id).getSelectedText();
+ 	}
+ 
++	async executeJavaScript(id: string, script: string): Promise<unknown> {
++		return this._getBrowserView(id).executeJavaScript(script);
++	}
++
+ 	async clearStorage(id: string): Promise<void> {
+ 		return this._getBrowserView(id).clearStorage();
+ 	}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+index bad0c28992f..07eeb6e7f7a 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+@@ -20,10 +20,29 @@ import { AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, I
+ type AiHubDrawerKind = 'settings' | 'gateway';
+ 
+ const DRAWER_TRANSITION_MS = 180;
++const SUB2API_IMPORT_POLL_MS = 2000;
+ const AI_GATEWAY_IMPORT_CALLBACK_URL = 'vscode://ai-gateway/import';
+ const API_KEY_PARAM_NAMES = ['api_key', 'apiKey', 'openai_api_key', 'OPENAI_API_KEY'];
+ const IMPORT_ONLY_KEY_PARAM_NAMES = ['key', 'token', 'access_token'];
+ const BASE_URL_PARAM_NAMES = ['base_url', 'baseUrl', 'openai_base_url', 'OPENAI_BASE_URL'];
++const SUB2API_READ_API_KEY_SCRIPT = `(() => {
++	const authToken = window.localStorage.getItem('auth_token');
++	if (!authToken) {
++		return undefined;
++	}
++	return window.fetch('/api/v1/keys?page=1&page_size=100&status=active&sort_by=created_at&sort_order=desc', {
++		credentials: 'include',
++		headers: { Authorization: 'Bearer ' + authToken }
++	}).then(response => response.ok ? response.json() : undefined).then(payload => {
++		if (!payload || (typeof payload.code === 'number' && payload.code !== 0)) {
++			return undefined;
++		}
++		const data = typeof payload.code === 'number' ? payload.data : payload;
++		const items = Array.isArray(data?.items) ? data.items : [];
++		const item = items.find(candidate => candidate?.status === 'active' && typeof candidate?.key === 'string' && candidate.key.trim().length >= 8);
++		return item ? { apiKey: item.key.trim() } : undefined;
++	}).catch(() => undefined);
++})()`;
+ 
+ function parseAiHubMode(value: unknown): AiHubMode {
+ 	return value === 'claudeAgent' || value === 'codexAgent' ? value : 'edit';
+@@ -71,6 +90,14 @@ function inferGatewayApiBaseUrl(gatewayUrl: string): string {
+ 	}
+ }
+ 
++function hasSameOrigin(url: string, expectedUrl: string): boolean {
++	try {
++		return new URL(url).origin === new URL(expectedUrl).origin;
++	} catch {
++		return false;
++	}
++}
++
+ function parseGatewayImportedKey(navigatedUrl: string, gatewayUrl: string): { apiKey: string; baseUrl: string } | undefined {
+ 	let url: URL;
+ 	try {
+@@ -109,6 +136,9 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 	private gatewayModel: IBrowserViewModel | undefined;
+ 	private activeDrawer: AiHubDrawerKind | undefined;
+ 	private lastImportedGatewayUrl: string | undefined;
++	private lastImportedApiKey: string | undefined;
++	private gatewayImportInProgress = false;
++	private gatewayApiKeyImported = false;
+ 	private operationId = 0;
+ 
+ 	constructor(
+@@ -281,14 +311,49 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 
+ 	private hookGatewayImport(model: IBrowserViewModel, gatewayUrl: string): void {
+ 		this.gatewayDisposables.clear();
+-		this.gatewayDisposables.add(model.onDidNavigate(event => void this.importGatewayApiKey(event.url, gatewayUrl)));
++		this.gatewayApiKeyImported = false;
++		this.gatewayDisposables.add(model.onDidNavigate(event => {
++			void this.importGatewayApiKey(event.url, gatewayUrl);
++			void this.importSub2ApiKey(model, gatewayUrl);
++		}));
+ 		this.gatewayDisposables.add(model.onDidChangeLoadingState(event => {
+ 			if (event.error?.url) {
+ 				void this.importGatewayApiKey(event.error.url, gatewayUrl);
+ 			}
++			if (!event.loading) {
++				void this.importSub2ApiKey(model, gatewayUrl);
++			}
+ 		}));
++		const importTimer = mainWindow.setInterval(() => void this.importSub2ApiKey(model, gatewayUrl), SUB2API_IMPORT_POLL_MS);
++		this.gatewayDisposables.add(toDisposable(() => mainWindow.clearInterval(importTimer)));
+ 		if (model.url) {
+ 			void this.importGatewayApiKey(model.url, gatewayUrl);
++			if (!model.loading) {
++				void this.importSub2ApiKey(model, gatewayUrl);
++			}
++		}
++	}
++
++	private async importSub2ApiKey(model: IBrowserViewModel, gatewayUrl: string): Promise<void> {
++		if (this.gatewayApiKeyImported || this.gatewayImportInProgress || model.loading || !hasSameOrigin(model.url, gatewayUrl)) {
++			return;
++		}
++
++		this.gatewayImportInProgress = true;
++		try {
++			const result = await model.executeJavaScript(SUB2API_READ_API_KEY_SCRIPT);
++			if (!result || typeof result !== 'object') {
++				return;
++			}
++			const apiKey = (result as { apiKey?: unknown }).apiKey;
++			if (typeof apiKey !== 'string' || apiKey.trim().length < 8) {
++				return;
++			}
++			await this.saveImportedGatewayApiKey({ apiKey: apiKey.trim(), baseUrl: inferGatewayApiBaseUrl(gatewayUrl) });
++		} catch (error) {
++			this.logService.trace('[aiHub] Sub2API key is not available yet', error);
++		} finally {
++			this.gatewayImportInProgress = false;
+ 		}
+ 	}
+ 
+@@ -303,7 +368,18 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 		}
+ 
+ 		this.lastImportedGatewayUrl = navigatedUrl;
++		await this.saveImportedGatewayApiKey(imported);
++	}
++
++	private async saveImportedGatewayApiKey(imported: { apiKey: string; baseUrl: string }): Promise<void> {
++		if (imported.apiKey === this.lastImportedApiKey) {
++			this.gatewayApiKeyImported = true;
++			return;
++		}
++
+ 		await this.aiConfigService.saveCodexSettings({ baseUrl: imported.baseUrl, apiKey: imported.apiKey });
++		this.lastImportedApiKey = imported.apiKey;
++		this.gatewayApiKeyImported = true;
+ 		this.notificationService.info(localize('aiHub.gatewayKeyImported', "AI Gateway API Key 已导入 Codex。"));
+ 	}
+ 
+diff --git a/src/vs/workbench/contrib/browserView/common/browserView.ts b/src/vs/workbench/contrib/browserView/common/browserView.ts
+index 4c028c855a8..5707167a6e7 100644
+--- a/src/vs/workbench/contrib/browserView/common/browserView.ts
++++ b/src/vs/workbench/contrib/browserView/common/browserView.ts
+@@ -368,6 +368,7 @@ export interface IBrowserViewModel extends IDisposable {
+ 	findInPage(text: string, options?: IBrowserViewFindInPageOptions): Promise<void>;
+ 	stopFindInPage(keepSelection?: boolean): Promise<void>;
+ 	getSelectedText(): Promise<string>;
++	executeJavaScript(script: string): Promise<unknown>;
+ 	clearStorage(): Promise<void>;
+ 	setSharedWithAgent(shared: boolean): Promise<boolean>;
+ 	trustCertificate(host: string, fingerprint: string): Promise<void>;
+@@ -714,6 +715,10 @@ export class BrowserViewModel extends Disposable implements IBrowserViewModel {
+ 		return this.browserViewService.getSelectedText(this.id);
+ 	}
+ 
++	async executeJavaScript(script: string): Promise<unknown> {
++		return this.browserViewService.executeJavaScript(this.id, script);
++	}
++
+ 	async clearStorage(): Promise<void> {
+ 		return this.browserViewService.clearStorage(this.id);
+ 	}

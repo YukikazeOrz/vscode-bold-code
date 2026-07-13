@@ -30,6 +30,13 @@ export BINARY_NAME="${BINARY_NAME:-codium}"
 export OS_NAME=osx
 export VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 export SHOULD_BUILD=yes
+export SHOULD_BUILD_DMG=yes
+export SHOULD_BUILD_ZIP=no
+export SHOULD_BUILD_REH=no
+export SHOULD_BUILD_REH_WEB=no
+export SHOULD_BUILD_CLI=no
+export SHOULD_BUILD_SRC=no
+export SHOULD_GENERATE_CHECKSUMS=no
 
 # Keep every reusable download outside vscode/, because get_repo.sh resets that
 # worktree before each build. Override VSCODE_BUILD_CACHE to place it elsewhere.
@@ -165,6 +172,8 @@ echo "   This is the long step — expect 30-90+ minutes depending on hardware."
 
 echo ""
 echo "-- Step 3/3: Package into dmg --"
+rm -rf assets
+mkdir -p assets
 ./prepare_assets.sh
 
 echo ""

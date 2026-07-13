@@ -1,0 +1,113 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index e9126ce..f965dbf 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -7,10 +7,11 @@ import { RunOnceScheduler } from '../../../../base/common/async.js';
+ import { Disposable } from '../../../../base/common/lifecycle.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+ import { ICommandService } from '../../../../platform/commands/common/commands.js';
++import { IConfigurationService, ConfigurationTarget } from '../../../../platform/configuration/common/configuration.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { ViewContainerLocation } from '../../../common/views.js';
+-import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
++import { IWorkbenchLayoutService, LayoutSettings, Parts } from '../../../services/layout/browser/layoutService.js';
+ import { IViewsService } from '../../../services/views/common/viewsService.js';
+ import { AiHubMode, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ 
+@@ -42,6 +43,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		@IAiConfigService private readonly aiConfigService: IAiConfigService,
+ 		@IStorageService private readonly storageService: IStorageService,
+ 		@ICommandService private readonly commandService: ICommandService,
++		@IConfigurationService private readonly configurationService: IConfigurationService,
+ 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+ 		@IViewsService private readonly viewsService: IViewsService,
+ 		@ILogService private readonly logService: ILogService,
+@@ -112,7 +114,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 				this.currentMode = mode;
+ 			} else {
+ 				this.currentMode = mode;
+-				this.prepareAgentSurface();
++				await this.prepareAgentSurface();
+ 				await this.aiConfigService.setMode(mode);
+ 			}
+ 			await this.applyModeLayout(mode, previousMode);
+@@ -176,6 +178,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 	}
+ 
+ 	private async restoreEditLayout(): Promise<void> {
++		await this.setAgentChrome(false);
+ 		this.layoutService.setAuxiliaryBarMaximized(false);
+ 		const snapshot = this.readLayoutSnapshot();
+ 		if (!snapshot) {
+@@ -203,7 +206,8 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		this.layoutService.layout();
+ 	}
+ 
+-	private prepareAgentSurface(): void {
++	private async prepareAgentSurface(): Promise<void> {
++		await this.setAgentChrome(true);
+ 		this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+ 		this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+ 		this.layoutService.setAuxiliaryBarMaximized(true);
+@@ -212,7 +216,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 	}
+ 
+ 	private async applyAgentLayout(mode: AiHubMode): Promise<void> {
+-		this.prepareAgentSurface();
++		await this.prepareAgentSurface();
+ 
+ 		try {
+ 			await this.commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
+@@ -220,7 +224,7 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			this.logService.warn('[aiHub] failed to open agent sidebar via extension command', error);
+ 		}
+ 
+-		this.prepareAgentSurface();
++		await this.prepareAgentSurface();
+ 		await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode));
+ 		if (!this.arrangeAgentContainer(mode)) {
+ 			this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+@@ -302,4 +306,20 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		this.layoutService.setPartHidden(true, Parts.PANEL_PART);
+ 		this.layoutService.setPartHidden(true, Parts.EDITOR_PART);
+ 	}
++
++	private async setAgentChrome(enabled: boolean): Promise<void> {
++		mainWindow.document.body.classList.toggle('ai-hub-agent-mode', enabled);
++		await Promise.all([
++			this.configurationService.updateValue(
++				LayoutSettings.LAYOUT_ACTIONS,
++				enabled ? false : undefined,
++				ConfigurationTarget.MEMORY
++			),
++			this.configurationService.updateValue(
++				'workbench.statusBar.visible',
++				enabled ? false : undefined,
++				ConfigurationTarget.MEMORY
++			),
++		]);
++	}
+ }
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
+index e7dfda9..f0b24c7 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
+@@ -3,6 +3,17 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++body.ai-hub-agent-mode .monaco-workbench .part.sidebar > .title,
++body.ai-hub-agent-mode .monaco-workbench .part.auxiliarybar > .title {
++	display: none !important;
++}
++
++body.ai-hub-agent-mode .monaco-workbench .part.sidebar > .content,
++body.ai-hub-agent-mode .monaco-workbench .part.auxiliarybar > .content {
++	top: 0 !important;
++	height: 100% !important;
++}
++
+ .ai-hub-drawer {
+ 	position: absolute;
+ 	right: 0;

@@ -1,0 +1,366 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+index aacd1c6fb1f..e2003c6db78 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+@@ -7,6 +7,7 @@ import './media/aiHubDrawer.css';
+ import { $, addDisposableListener, EventType } from '../../../../base/browser/dom.js';
+ import { getZoomFactor } from '../../../../base/browser/browser.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
++import { isCancellationError } from '../../../../base/common/errors.js';
+ import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+ import { localize } from '../../../../nls.js';
+ import { ICommandService } from '../../../../platform/commands/common/commands.js';
+@@ -1171,7 +1172,9 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 
+ 		const agentNote = document.createElement('div');
+ 		agentNote.className = 'agent-note';
+-		agentNote.textContent = state.mode === 'edit' ? '当前保持完整编辑器布局。' : '当前仅保留所选 Agent 对话。';
++		agentNote.textContent = state.mode === 'edit'
++			? '当前保持完整编辑器布局；切换模式或扩展后会自动刷新。'
++			: '当前仅保留所选 Agent 对话；切换模式或扩展后会自动刷新。';
+ 		page.appendChild(agentNote);
+ 
+ 		const providersLabel = document.createElement('div');
+@@ -1300,20 +1303,18 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 					const id = message.id === 'claude' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
+ 					const enabled = !!message.enabled;
+ 					await this.aiConfigService.setExtensionEnabled(id, enabled);
+-					await this.refreshSettings();
+ 					const agentName = message.id === 'claude' ? 'Claude Code' : 'Codex';
+-					this.notificationService.info(enabled
+-						? localize('aiHub.agentConnected', "{0} 已接入", agentName)
+-						: localize('aiHub.agentDisconnected', "{0} 已断开接入", agentName));
++					await this.reloadAfterExtensionChange(enabled
++						? localize('aiHub.agentConnectedReloading', "{0} 已接入，正在刷新工作区...", agentName)
++						: localize('aiHub.agentDisconnectedReloading', "{0} 已断开，正在刷新工作区...", agentName));
+ 					break;
+ 				}
+ 				case 'setMode': {
+ 					const mode = parseAiHubMode(message.mode);
+ 					await this.modeController.setMode(mode);
+-					await this.refreshSettings();
+-					this.notificationService.info(mode === 'edit'
+-						? localize('aiHub.editModeEnabled', "已切换到编辑模式")
+-						: localize('aiHub.agentModeEnabled', "已切换到 {0}", mode === 'claudeAgent' ? 'Claude Agent' : 'Codex Agent'));
++					await this.reloadAfterExtensionChange(mode === 'edit'
++						? localize('aiHub.editModeEnabledReloading', "已切换到编辑模式，正在刷新工作区...")
++						: localize('aiHub.agentModeEnabledReloading', "已切换到 {0}，正在刷新工作区...", mode === 'claudeAgent' ? 'Claude Agent' : 'Codex Agent'));
+ 					break;
+ 				}
+ 				case 'openGateway': {
+@@ -1331,10 +1332,18 @@ export class AiHubDrawerService extends Disposable implements IAiHubDrawerServic
+ 				}
+ 			}
+ 		} catch (error) {
+-			this.logService.error('[aiHub] failed to handle drawer message', error);
++			if (!isCancellationError(error)) {
++				this.logService.error('[aiHub] failed to handle drawer message', error);
++			}
+ 		}
+ 	}
+ 
++	private async reloadAfterExtensionChange(message: string): Promise<void> {
++		this.notificationService.info(message);
++		await this.close();
++		await this.commandService.executeCommand('workbench.action.reloadWindow');
++	}
++
+ 	override dispose(): void {
+ 		void this.gatewayModel?.setVisible(false);
+ 		super.dispose();
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
+index a092806f6c8..4b30ee31dc8 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
+@@ -185,6 +185,290 @@ body.bold-modern-workbench .monaco-workbench .sash.active:before {
+ 	transition: background-color 100ms ease;
+ }
+ 
++/* Workbench surfaces */
++body.bold-modern-workbench .monaco-workbench .part.sidebar > .content,
++body.bold-modern-workbench .monaco-workbench .part.auxiliarybar > .content,
++body.bold-modern-workbench .monaco-workbench .part.panel > .content {
++	background: color-mix(in srgb, var(--vscode-sideBar-background) 97%, var(--vscode-editor-background) 3%);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.editor > .content {
++	background:
++		radial-gradient(circle at 100% 0, color-mix(in srgb, var(--vscode-focusBorder) 4%, transparent), transparent 32%),
++		var(--vscode-editor-background);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.sidebar > .title,
++body.bold-modern-workbench .monaco-workbench .part.auxiliarybar > .title {
++	padding-inline: var(--vscode-spacing-size40);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.sidebar .composite.title,
++body.bold-modern-workbench .monaco-workbench .part.auxiliarybar .composite.title {
++	min-height: 42px;
++}
++
++body.bold-modern-workbench .monaco-workbench .pane-composite-part .monaco-pane-view {
++	padding: 0 var(--vscode-spacing-size40) var(--vscode-spacing-size40);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-pane-view .pane > .pane-header {
++	margin: var(--vscode-spacing-size20) 0;
++	padding-inline: var(--vscode-spacing-size80);
++	background: color-mix(in srgb, var(--vscode-sideBarSectionHeader-background) 84%, transparent);
++	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-pane-view .pane > .pane-header:hover {
++	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 70%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .pane-body {
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-list-row,
++body.bold-modern-workbench .monaco-workbench .monaco-table-tr,
++body.bold-modern-workbench .monaco-workbench .monaco-tree-sticky-row {
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-list-row.selected,
++body.bold-modern-workbench .monaco-workbench .monaco-list-row.focused {
++	box-shadow: inset var(--vscode-strokeThickness) 0 color-mix(in srgb, var(--vscode-focusBorder) 75%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-count-badge,
++body.bold-modern-workbench .monaco-workbench .badge .badge-content,
++body.bold-modern-workbench .monaco-workbench .monaco-keybinding-key {
++	border-radius: var(--vscode-cornerRadius-circle);
++}
++
++/* Navigation and editor chrome */
++body.bold-modern-workbench .monaco-workbench .composite-bar .action-item .action-label {
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .composite-bar .action-item .action-label:hover {
++	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 80%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.editor .breadcrumbs-control {
++	background: color-mix(in srgb, var(--vscode-breadcrumb-background) 94%, var(--vscode-editor-background) 6%);
++	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.editor .breadcrumbs-control .monaco-breadcrumb-item {
++	border-radius: var(--vscode-cornerRadius-small);
++}
++
++body.bold-modern-workbench .monaco-workbench .editor-instance {
++	overflow: hidden;
++	border-radius: 0 0 var(--vscode-cornerRadius-large) var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .editor-widget,
++body.bold-modern-workbench .monaco-workbench .monaco-editor .find-widget,
++body.bold-modern-workbench .monaco-workbench .monaco-editor .rename-box,
++body.bold-modern-workbench .monaco-workbench .parameter-hints-widget {
++	overflow: hidden;
++	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent) !important;
++	border-radius: var(--vscode-cornerRadius-large) !important;
++	box-shadow: 0 14px 38px color-mix(in srgb, var(--vscode-widget-shadow) 58%, transparent) !important;
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-editor .find-widget .monaco-inputbox,
++body.bold-modern-workbench .monaco-workbench .monaco-editor .find-widget .monaco-sash {
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.editor .editor-group-container > .title .tabs-container > .tab .tab-close {
++	border-radius: var(--vscode-cornerRadius-small);
++}
++
++/* Panel and terminal */
++body.bold-modern-workbench .monaco-workbench .part.panel > .title {
++	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .part.panel > .title .composite-bar .action-item.checked .action-label {
++	background: color-mix(in srgb, var(--vscode-panelTitle-activeBorder) 12%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .pane-body.integrated-terminal .terminal-outer-container,
++body.bold-modern-workbench .monaco-workbench .terminal-editor .terminal-outer-container {
++	padding: var(--vscode-spacing-size40);
++}
++
++body.bold-modern-workbench .monaco-workbench .pane-body.integrated-terminal .terminal-wrapper,
++body.bold-modern-workbench .monaco-workbench .terminal-editor .terminal-wrapper {
++	overflow: hidden;
++	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .pane-body.integrated-terminal .terminal-tabs-entry {
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++/* Welcome and empty states */
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedSlideCategories {
++	padding: var(--vscode-spacing-size240) var(--vscode-spacing-size320);
++}
++
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedCategoriesContainer > .header .title {
++	font-weight: var(--vscode-agents-fontWeight-semiBold);
++	letter-spacing: -.025em;
++}
++
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedCategoriesContainer > .header .subtitle {
++	color: var(--vscode-descriptionForeground);
++}
++
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedCategoriesContainer > .categories-column > div {
++	padding: var(--vscode-spacing-size160);
++	background: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, transparent);
++	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++	border-radius: var(--vscode-cornerRadius-xLarge);
++	box-shadow: inset 0 var(--vscode-strokeThickness) color-mix(in srgb, white 5%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedSlideCategories li {
++	padding: var(--vscode-spacing-size20) var(--vscode-spacing-size60);
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedSlideCategories li:hover {
++	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 76%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .getting-started-category,
++body.bold-modern-workbench .monaco-workbench .walkThroughContent .getting-started-step {
++	border-radius: var(--vscode-cornerRadius-large) !important;
++}
++
++body.bold-modern-workbench .monaco-workbench .empty-view,
++body.bold-modern-workbench .monaco-workbench .watermark-box {
++	color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
++}
++
++/* Settings and extension management */
++body.bold-modern-workbench .monaco-workbench .settings-editor > .settings-header {
++	margin-top: var(--vscode-spacing-size160);
++	padding: var(--vscode-spacing-size120) var(--vscode-spacing-size240);
++	background: color-mix(in srgb, var(--vscode-editorWidget-background) 74%, transparent);
++	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++	border-radius: var(--vscode-cornerRadius-xLarge);
++}
++
++body.bold-modern-workbench .monaco-workbench .settings-editor > .settings-header .suggest-input-container,
++body.bold-modern-workbench .monaco-workbench .settings-editor > .settings-header .monaco-inputbox {
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .settings-editor .settings-tabs-widget .action-label {
++	border-radius: var(--vscode-cornerRadius-medium) var(--vscode-cornerRadius-medium) 0 0 !important;
++}
++
++body.bold-modern-workbench .monaco-workbench .settings-editor .settings-row-inner-container {
++	margin: 0 var(--vscode-spacing-size40);
++	padding-inline: var(--vscode-spacing-size120);
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .settings-editor .setting-item-control :is(input, select, textarea),
++body.bold-modern-workbench .monaco-workbench .settings-editor .setting-item-control .monaco-inputbox {
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++body.bold-modern-workbench .monaco-workbench .extensions-viewlet .extension-list-item,
++body.bold-modern-workbench .monaco-workbench .extensions-list .extension-list-item {
++	margin: var(--vscode-spacing-size20) var(--vscode-spacing-size40);
++	padding: var(--vscode-spacing-size80);
++	border: var(--vscode-strokeThickness) solid transparent;
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .extensions-viewlet .extension-list-item:hover,
++body.bold-modern-workbench .monaco-workbench .extensions-list .extension-list-item:hover {
++	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 72%, transparent);
++	border-color: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++}
++
++/* Search, SCM and forms */
++body.bold-modern-workbench .monaco-workbench .search-view .search-widget,
++body.bold-modern-workbench .monaco-workbench .scm-view .scm-input,
++body.bold-modern-workbench .monaco-workbench .explorer-viewlet .explorer-folders-view {
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .search-view .search-widget .monaco-inputbox,
++body.bold-modern-workbench .monaco-workbench .scm-view .scm-input .monaco-inputbox {
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench :is(input[type='text'], input[type='search'], input[type='password'], textarea, select) {
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-dropdown-with-primary > .action-container > .action-label:first-child {
++	border-radius: var(--vscode-cornerRadius-large) 0 0 var(--vscode-cornerRadius-large);
++}
++
++body.bold-modern-workbench .monaco-workbench .monaco-dropdown-with-primary > .dropdown-action-container > .action-label:last-child {
++	border-radius: 0 var(--vscode-cornerRadius-large) var(--vscode-cornerRadius-large) 0;
++}
++
++/* Chat and agent surfaces */
++body.bold-modern-workbench .monaco-workbench .interactive-session,
++body.bold-modern-workbench .monaco-workbench .chat-view-welcome-container,
++body.bold-modern-workbench .monaco-workbench .chat-editing-session-container {
++	background:
++		radial-gradient(circle at 50% 0, color-mix(in srgb, var(--vscode-focusBorder) 5%, transparent), transparent 34%),
++		var(--vscode-sideBar-background);
++}
++
++body.bold-modern-workbench .monaco-workbench .interactive-input-part,
++body.bold-modern-workbench .monaco-workbench .chat-input-container,
++body.bold-modern-workbench .monaco-workbench .chat-editing-session-container .chat-editing-session-list {
++	overflow: hidden;
++	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
++	border-radius: var(--vscode-cornerRadius-xLarge);
++	box-shadow: 0 10px 30px color-mix(in srgb, var(--vscode-widget-shadow) 32%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .chat-list-item,
++body.bold-modern-workbench .monaco-workbench .chat-tree-item {
++	border-radius: var(--vscode-cornerRadius-large);
++}
++
++/* Menus, widgets and notifications */
++body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical {
++	padding: var(--vscode-spacing-size40);
++}
++
++body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical .action-menu-item {
++	border-radius: var(--vscode-cornerRadius-medium);
++}
++
++body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical .action-menu-item:hover {
++	background: color-mix(in srgb, var(--vscode-menu-selectionBackground) 86%, transparent);
++}
++
++body.bold-modern-workbench .quick-input-list .monaco-list-row {
++	margin-block: var(--vscode-spacing-size20);
++}
++
++body.bold-modern-workbench .notifications-toasts .notification-toast .notification-list-item,
++body.bold-modern-workbench .notifications-center .notification-list-item {
++	background: color-mix(in srgb, var(--vscode-notifications-background) 96%, transparent);
++}
++
++body.bold-modern-workbench .monaco-workbench .progress-container .progress-bit {
++	border-radius: var(--vscode-cornerRadius-circle);
++}
++
+ @media (prefers-reduced-motion: reduce) {
+ 	body.bold-modern-workbench *,
+ 	body.bold-modern-workbench *::before,
+

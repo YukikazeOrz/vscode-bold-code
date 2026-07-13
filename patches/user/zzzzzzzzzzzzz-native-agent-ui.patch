@@ -1,0 +1,96 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index 3b78e3cb2c5..7970c797805 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -20,7 +20,7 @@ import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/tit
+ import { AiConfigService } from './aiConfigService.js';
+ import { AiHubDrawerService } from './aiHubDrawerService.js';
+ import { AiHubModeController } from './aiHubModeController.js';
+-import { AI_GATEWAY_OPEN_COMMAND_ID, AI_HUB_OPEN_COMMAND_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController } from './aiHubTypes.js';
++import { AI_GATEWAY_OPEN_COMMAND_ID, AI_HUB_OPEN_COMMAND_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController, MODERN_WORKBENCH_CLASS } from './aiHubTypes.js';
+ 
+ const AI_HUB_FIRST_RUN_STORAGE_KEY = 'aiHub.firstRunHandled';
+ 
+@@ -29,8 +29,8 @@ class ModernWorkbenchContribution extends Disposable {
+ 
+ 	constructor() {
+ 		super();
+-		mainWindow.document.body.classList.add('bold-modern-workbench');
+-		this._register(toDisposable(() => mainWindow.document.body.classList.remove('bold-modern-workbench')));
++		mainWindow.document.body.classList.add(MODERN_WORKBENCH_CLASS);
++		this._register(toDisposable(() => mainWindow.document.body.classList.remove(MODERN_WORKBENCH_CLASS)));
+ 	}
+ }
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index f965dbf42ab..5bcea80d878 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -13,7 +13,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
+ import { ViewContainerLocation } from '../../../common/views.js';
+ import { IWorkbenchLayoutService, LayoutSettings, Parts } from '../../../services/layout/browser/layoutService.js';
+ import { IViewsService } from '../../../services/views/common/viewsService.js';
+-import { AiHubMode, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
++import { AI_HUB_AGENT_MODE_CLASS, AiHubMode, IAiConfigService, IAiHubModeController, MODERN_WORKBENCH_CLASS } from './aiHubTypes.js';
+ 
+ const AI_HUB_LAYOUT_STORAGE_KEY = 'aiHub.editModeLayout';
+ const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar-secondary', 'claude-sidebar'];
+@@ -308,7 +308,9 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 	}
+ 
+ 	private async setAgentChrome(enabled: boolean): Promise<void> {
+-		mainWindow.document.body.classList.toggle('ai-hub-agent-mode', enabled);
++		mainWindow.document.body.classList.toggle(AI_HUB_AGENT_MODE_CLASS, enabled);
++		// Agent mode is an extension-owned surface. Keep its native UI isolated from the custom Workbench skin.
++		mainWindow.document.body.classList.toggle(MODERN_WORKBENCH_CLASS, !enabled);
+ 		await Promise.all([
+ 			this.configurationService.updateValue(
+ 				LayoutSettings.LAYOUT_ACTIONS,
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+index 6b8361d669b..e233496ae4b 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+@@ -11,6 +11,9 @@ export const CODEX_EXTENSION_ID = 'openai.chatgpt';
+ export const AI_HUB_OPEN_COMMAND_ID = 'aiHub.open';
+ export const AI_GATEWAY_OPEN_COMMAND_ID = 'aiGateway.open';
+ 
++export const AI_HUB_AGENT_MODE_CLASS = 'ai-hub-agent-mode';
++export const MODERN_WORKBENCH_CLASS = 'bold-modern-workbench';
++
+ /** Env var name Codex's custom `model_providers.<id>.env_key` points at. */
+ export const CODEX_PROVIDER_ID = 'ai-hub-gateway';
+ export const CODEX_ENV_KEY = 'CODEX_AI_HUB_API_KEY';
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
+index 4b30ee31dc8..a436e04ba38 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
+@@ -420,29 +420,6 @@ body.bold-modern-workbench .monaco-workbench .monaco-dropdown-with-primary > .dr
+ 	border-radius: 0 var(--vscode-cornerRadius-large) var(--vscode-cornerRadius-large) 0;
+ }
+ 
+-/* Chat and agent surfaces */
+-body.bold-modern-workbench .monaco-workbench .interactive-session,
+-body.bold-modern-workbench .monaco-workbench .chat-view-welcome-container,
+-body.bold-modern-workbench .monaco-workbench .chat-editing-session-container {
+-	background:
+-		radial-gradient(circle at 50% 0, color-mix(in srgb, var(--vscode-focusBorder) 5%, transparent), transparent 34%),
+-		var(--vscode-sideBar-background);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .interactive-input-part,
+-body.bold-modern-workbench .monaco-workbench .chat-input-container,
+-body.bold-modern-workbench .monaco-workbench .chat-editing-session-container .chat-editing-session-list {
+-	overflow: hidden;
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-	border-radius: var(--vscode-cornerRadius-xLarge);
+-	box-shadow: 0 10px 30px color-mix(in srgb, var(--vscode-widget-shadow) 32%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .chat-list-item,
+-body.bold-modern-workbench .monaco-workbench .chat-tree-item {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+ /* Menus, widgets and notifications */
+ body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical {
+ 	padding: var(--vscode-spacing-size40);

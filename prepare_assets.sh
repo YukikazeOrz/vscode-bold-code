@@ -64,6 +64,6 @@ if [[ "${SHOULD_BUILD_CLI}" != "no" ]]; then
   cd ..
 fi
 
-if [[ "${OS_NAME}" != "windows" ]]; then
+if [[ "${OS_NAME}" != "windows" && "${SHOULD_GENERATE_CHECKSUMS}" != "no" ]]; then
   ./prepare_checksums.sh
 fi

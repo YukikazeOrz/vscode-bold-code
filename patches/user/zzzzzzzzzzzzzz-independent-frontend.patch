@@ -1,0 +1,5109 @@
+diff --git a/src/vs/code/electron-browser/workbench/workbench.ts b/src/vs/code/electron-browser/workbench/workbench.ts
+index 767fbe0..b6074b8 100644
+--- a/src/vs/code/electron-browser/workbench/workbench.ts
++++ b/src/vs/code/electron-browser/workbench/workbench.ts
+@@ -29,246 +29,190 @@
+ 	}
+ 
+ 	function showDefaultSplash(configuration: INativeWindowConfiguration) {
+-		let data = configuration.partsSplash;
+-		if (data) {
+-			if (configuration.autoDetectHighContrast && configuration.colorScheme.highContrast) {
+-				if ((configuration.colorScheme.dark && data.baseTheme !== 'hc-black') || (!configuration.colorScheme.dark && data.baseTheme !== 'hc-light')) {
+-					data = undefined; // high contrast mode has been turned by the OS -> ignore stored colors and layouts
+-				}
+-			} else if (configuration.autoDetectColorScheme) {
+-				if ((configuration.colorScheme.dark && data.baseTheme !== 'vs-dark') || (!configuration.colorScheme.dark && data.baseTheme !== 'vs')) {
+-					data = undefined; // OS color scheme is tracked and has changed
+-				}
+-			}
+-		}
+-
+-		// developing an extension -> ignore stored layouts
+-		if (data && configuration.extensionDevelopmentPath) {
+-			data.layoutInfo = undefined;
+-		}
+-
+-		// minimal color configuration (works with or without persisted data)
+-		let baseTheme;
+-		let shellBackground;
+-		let shellForeground;
+-		if (data) {
+-			baseTheme = data.baseTheme;
+-			shellBackground = data.colorInfo.editorBackground;
+-			shellForeground = data.colorInfo.foreground;
+-		} else if (configuration.autoDetectHighContrast && configuration.colorScheme.highContrast) {
+-			if (configuration.colorScheme.dark) {
+-				baseTheme = 'hc-black';
+-				shellBackground = '#000000';
+-				shellForeground = '#FFFFFF';
+-			} else {
+-				baseTheme = 'hc-light';
+-				shellBackground = '#FFFFFF';
+-				shellForeground = '#000000';
+-			}
+-		} else if (configuration.autoDetectColorScheme) {
+-			if (configuration.colorScheme.dark) {
+-				baseTheme = 'vs-dark';
+-				shellBackground = '#1E1E1E';
+-				shellForeground = '#CCCCCC';
+-			} else {
+-				baseTheme = 'vs';
+-				shellBackground = '#FFFFFF';
+-				shellForeground = '#000000';
+-			}
+-		}
++		const data = configuration.partsSplash;
+ 
+-		const style = document.createElement('style');
+-		style.className = 'initialShellColors';
+-		window.document.head.appendChild(style);
+-		style.textContent = `body {	background-color: ${shellBackground}; color: ${shellForeground}; margin: 0; padding: 0; }`;
+-
+-		// set zoom level as soon as possible
++		// Preserve the persisted zoom level, but never paint the cached VS Code parts.
+ 		if (typeof data?.zoomLevel === 'number' && typeof preloadGlobals?.webFrame?.setZoomLevel === 'function') {
+ 			preloadGlobals.webFrame.setZoomLevel(data.zoomLevel);
+ 		}
+ 
+-		// restore parts if possible (we might not always store layout info)
+-		if (data?.layoutInfo) {
+-			const { layoutInfo, colorInfo } = data;
+-
+-			const splash = document.createElement('div');
+-			splash.id = 'monaco-parts-splash';
+-			splash.className = baseTheme ?? 'vs-dark';
+-
+-			if (layoutInfo.windowBorder && colorInfo.windowBorder) {
+-				const borderElement = document.createElement('div');
+-				borderElement.style.position = 'absolute';
+-				borderElement.style.width = 'calc(100vw - 2px)';
+-				borderElement.style.height = 'calc(100vh - 2px)';
+-				borderElement.style.zIndex = '1'; // allow border above other elements
+-				borderElement.style.border = `1px solid var(--window-border-color)`;
+-				borderElement.style.setProperty('--window-border-color', colorInfo.windowBorder);
+-
+-				if (layoutInfo.windowBorderRadius) {
+-					borderElement.style.borderRadius = layoutInfo.windowBorderRadius;
+-				}
+-
+-				splash.appendChild(borderElement);
++		const style = document.createElement('style');
++		style.className = 'initialShellColors';
++		style.textContent = `
++			body {
++				margin: 0;
++				padding: 0;
++				background: #0b0e14;
++				color: #d7dce6;
++				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+ 			}
+-
+-			if (layoutInfo.auxiliaryBarWidth === Number.MAX_SAFE_INTEGER) {
+-				// if auxiliary bar is maximized, it goes as wide as the
+-				// window width but leaving room for activity bar
+-				layoutInfo.auxiliaryBarWidth = window.innerWidth - layoutInfo.activityBarWidth;
+-			} else {
+-				// otherwise adjust for other parts sizes if not maximized
+-				layoutInfo.auxiliaryBarWidth = Math.min(layoutInfo.auxiliaryBarWidth, window.innerWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.sideBarWidth));
++			#monaco-parts-splash {
++				position: fixed;
++				z-index: 9000;
++				inset: 0;
++				display: grid;
++				grid-template: "rail explorer topbar" 52px "rail explorer content" 1fr / 68px 264px 1fr;
++				overflow: hidden;
++				background: #0b0e14;
+ 			}
+-			layoutInfo.sideBarWidth = Math.min(layoutInfo.sideBarWidth, window.innerWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.auxiliaryBarWidth));
+-
+-			// part: title
+-			if (layoutInfo.titleBarHeight > 0) {
+-				const titleDiv = document.createElement('div');
+-				titleDiv.style.position = 'absolute';
+-				titleDiv.style.width = '100%';
+-				titleDiv.style.height = `${layoutInfo.titleBarHeight}px`;
+-				titleDiv.style.left = '0';
+-				titleDiv.style.top = '0';
+-				titleDiv.style.backgroundColor = `${colorInfo.titleBarBackground}`;
+-				(titleDiv.style as CSSStyleDeclaration & { '-webkit-app-region': string })['-webkit-app-region'] = 'drag';
+-				splash.appendChild(titleDiv);
+-
+-				if (colorInfo.titleBarBorder) {
+-					const titleBorder = document.createElement('div');
+-					titleBorder.style.position = 'absolute';
+-					titleBorder.style.width = '100%';
+-					titleBorder.style.height = '1px';
+-					titleBorder.style.left = '0';
+-					titleBorder.style.bottom = '0';
+-					titleBorder.style.borderBottom = `1px solid ${colorInfo.titleBarBorder}`;
+-					titleDiv.appendChild(titleBorder);
+-				}
++			.bold-initial-rail {
++				grid-area: rail;
++				display: flex;
++				box-sizing: border-box;
++				flex-direction: column;
++				align-items: center;
++				gap: 18px;
++				padding: 47px 8px 12px;
++				border-right: 1px solid #20252f;
++				background: #0e1219;
+ 			}
+-
+-			// part: activity bar
+-			if (layoutInfo.activityBarWidth > 0) {
+-				const activityDiv = document.createElement('div');
+-				activityDiv.style.position = 'absolute';
+-				activityDiv.style.width = `${layoutInfo.activityBarWidth}px`;
+-				activityDiv.style.height = `calc(100% - ${layoutInfo.titleBarHeight + layoutInfo.statusBarHeight}px)`;
+-				activityDiv.style.top = `${layoutInfo.titleBarHeight}px`;
+-				if (layoutInfo.sideBarSide === 'left') {
+-					activityDiv.style.left = '0';
+-				} else {
+-					activityDiv.style.right = '0';
+-				}
+-				activityDiv.style.backgroundColor = `${colorInfo.activityBarBackground}`;
+-				splash.appendChild(activityDiv);
+-
+-				if (colorInfo.activityBarBorder) {
+-					const activityBorderDiv = document.createElement('div');
+-					activityBorderDiv.style.position = 'absolute';
+-					activityBorderDiv.style.width = '1px';
+-					activityBorderDiv.style.height = '100%';
+-					activityBorderDiv.style.top = '0';
+-					if (layoutInfo.sideBarSide === 'left') {
+-						activityBorderDiv.style.right = '0';
+-						activityBorderDiv.style.borderRight = `1px solid ${colorInfo.activityBarBorder}`;
+-					} else {
+-						activityBorderDiv.style.left = '0';
+-						activityBorderDiv.style.borderLeft = `1px solid ${colorInfo.activityBarBorder}`;
+-					}
+-					activityDiv.appendChild(activityBorderDiv);
+-				}
++			.bold-initial-brand,
++			.bold-initial-mark {
++				display: grid;
++				place-items: center;
++				border: 1px solid #5897ff;
++				background: linear-gradient(145deg, #4f91ff, #2456b8);
++				box-shadow: 0 10px 28px rgb(43 105 222 / 28%);
++				color: #fff;
++				font-weight: 750;
+ 			}
+-
+-			// part: side bar
+-			if (layoutInfo.sideBarWidth > 0) {
+-				const sideDiv = document.createElement('div');
+-				sideDiv.style.position = 'absolute';
+-				sideDiv.style.width = `${layoutInfo.sideBarWidth}px`;
+-				sideDiv.style.height = `calc(100% - ${layoutInfo.titleBarHeight + layoutInfo.statusBarHeight}px)`;
+-				sideDiv.style.top = `${layoutInfo.titleBarHeight}px`;
+-				if (layoutInfo.sideBarSide === 'left') {
+-					sideDiv.style.left = `${layoutInfo.activityBarWidth}px`;
+-				} else {
+-					sideDiv.style.right = `${layoutInfo.activityBarWidth}px`;
+-				}
+-				sideDiv.style.backgroundColor = `${colorInfo.sideBarBackground}`;
+-				splash.appendChild(sideDiv);
+-
+-				if (colorInfo.sideBarBorder) {
+-					const sideBorderDiv = document.createElement('div');
+-					sideBorderDiv.style.position = 'absolute';
+-					sideBorderDiv.style.width = '1px';
+-					sideBorderDiv.style.height = '100%';
+-					sideBorderDiv.style.top = '0';
+-					sideBorderDiv.style.right = '0';
+-					if (layoutInfo.sideBarSide === 'left') {
+-						sideBorderDiv.style.borderRight = `1px solid ${colorInfo.sideBarBorder}`;
+-					} else {
+-						sideBorderDiv.style.left = '0';
+-						sideBorderDiv.style.borderLeft = `1px solid ${colorInfo.sideBarBorder}`;
+-					}
+-					sideDiv.appendChild(sideBorderDiv);
+-				}
++			.bold-initial-brand {
++				width: 38px;
++				height: 38px;
++				border-radius: 12px;
+ 			}
+-
+-			// part: auxiliary sidebar
+-			if (layoutInfo.auxiliaryBarWidth > 0) {
+-				const auxSideDiv = document.createElement('div');
+-				auxSideDiv.style.position = 'absolute';
+-				auxSideDiv.style.width = `${layoutInfo.auxiliaryBarWidth}px`;
+-				auxSideDiv.style.height = `calc(100% - ${layoutInfo.titleBarHeight + layoutInfo.statusBarHeight}px)`;
+-				auxSideDiv.style.top = `${layoutInfo.titleBarHeight}px`;
+-				if (layoutInfo.sideBarSide === 'left') {
+-					auxSideDiv.style.right = '0';
+-				} else {
+-					auxSideDiv.style.left = '0';
+-				}
+-				auxSideDiv.style.backgroundColor = `${colorInfo.sideBarBackground}`;
+-				splash.appendChild(auxSideDiv);
+-
+-				if (colorInfo.sideBarBorder) {
+-					const auxSideBorderDiv = document.createElement('div');
+-					auxSideBorderDiv.style.position = 'absolute';
+-					auxSideBorderDiv.style.width = '1px';
+-					auxSideBorderDiv.style.height = '100%';
+-					auxSideBorderDiv.style.top = '0';
+-					if (layoutInfo.sideBarSide === 'left') {
+-						auxSideBorderDiv.style.left = '0';
+-						auxSideBorderDiv.style.borderLeft = `1px solid ${colorInfo.sideBarBorder}`;
+-					} else {
+-						auxSideBorderDiv.style.right = '0';
+-						auxSideBorderDiv.style.borderRight = `1px solid ${colorInfo.sideBarBorder}`;
+-					}
+-					auxSideDiv.appendChild(auxSideBorderDiv);
+-				}
++			.bold-initial-rail-item {
++				display: grid;
++				width: 34px;
++				height: 34px;
++				place-items: center;
++				border-radius: 10px;
++				color: #77808e;
++				font-size: 13px;
+ 			}
+-
+-			// part: statusbar
+-			if (layoutInfo.statusBarHeight > 0) {
+-				const statusDiv = document.createElement('div');
+-				statusDiv.style.position = 'absolute';
+-				statusDiv.style.width = '100%';
+-				statusDiv.style.height = `${layoutInfo.statusBarHeight}px`;
+-				statusDiv.style.bottom = '0';
+-				statusDiv.style.left = '0';
+-				if (configuration.workspace && colorInfo.statusBarBackground) {
+-					statusDiv.style.backgroundColor = colorInfo.statusBarBackground;
+-				} else if (!configuration.workspace && colorInfo.statusBarNoFolderBackground) {
+-					statusDiv.style.backgroundColor = colorInfo.statusBarNoFolderBackground;
+-				}
+-				splash.appendChild(statusDiv);
+-
+-				if (colorInfo.statusBarBorder) {
+-					const statusBorderDiv = document.createElement('div');
+-					statusBorderDiv.style.position = 'absolute';
+-					statusBorderDiv.style.width = '100%';
+-					statusBorderDiv.style.height = '1px';
+-					statusBorderDiv.style.top = '0';
+-					statusBorderDiv.style.borderTop = `1px solid ${colorInfo.statusBarBorder}`;
+-					statusDiv.appendChild(statusBorderDiv);
+-				}
++			.bold-initial-explorer {
++				grid-area: explorer;
++				display: flex;
++				box-sizing: border-box;
++				flex-direction: column;
++				gap: 12px;
++				padding: 20px 18px;
++				border-right: 1px solid #20252f;
++				background: #11151c;
++			}
++			.bold-initial-eyebrow {
++				color: #667080;
++				font-size: 10px;
++				font-weight: 700;
++				letter-spacing: .12em;
++			}
++			.bold-initial-explorer strong {
++				margin-bottom: 12px;
++				font-size: 13px;
++			}
++			.bold-initial-tree-row {
++				height: 8px;
++				border-radius: 999px;
++				background: #252b35;
++				opacity: .72;
++			}
++			.bold-initial-topbar {
++				grid-area: topbar;
++				display: flex;
++				align-items: end;
++				padding: 0 16px;
++				border-bottom: 1px solid #20252f;
++				background: #0d1016;
++				-webkit-app-region: drag;
+ 			}
++			.bold-initial-tab {
++				min-width: 150px;
++				padding: 12px 16px 11px;
++				border: 1px solid #252b35;
++				border-bottom: 0;
++				border-radius: 10px 10px 0 0;
++				color: #8e98a8;
++				font-size: 12px;
++			}
++			.bold-initial-content {
++				grid-area: content;
++				display: flex;
++				flex-direction: column;
++				align-items: center;
++				justify-content: center;
++				gap: 12px;
++				margin: 10px;
++				border: 1px solid #20252f;
++				border-radius: 12px;
++				background: #11151b;
++			}
++			.bold-initial-mark {
++				width: 52px;
++				height: 52px;
++				border-radius: 16px;
++				font-size: 22px;
++			}
++			.bold-initial-content strong {
++				font-size: 17px;
++			}
++			.bold-initial-content span:last-child {
++				color: #707b8b;
++				font-size: 12px;
++			}
++		`;
++		window.document.head.appendChild(style);
++
++		const splash = document.createElement('div');
++		splash.id = 'monaco-parts-splash';
++
++		const rail = document.createElement('div');
++		rail.className = 'bold-initial-rail';
++		const brand = document.createElement('span');
++		brand.className = 'bold-initial-brand';
++		brand.textContent = 'B';
++		rail.append(brand);
++		for (const label of ['▱', '⌕', '>_', 'C', 'X']) {
++			const item = document.createElement('span');
++			item.className = 'bold-initial-rail-item';
++			item.textContent = label;
++			rail.append(item);
++		}
+ 
+-			window.document.body.appendChild(splash);
++		const explorer = document.createElement('aside');
++		explorer.className = 'bold-initial-explorer';
++		const eyebrow = document.createElement('span');
++		eyebrow.className = 'bold-initial-eyebrow';
++		eyebrow.textContent = 'WORKSPACE';
++		const workspace = document.createElement('strong');
++		workspace.textContent = 'Bold Code';
++		explorer.append(eyebrow, workspace);
++		for (let index = 0; index < 8; index++) {
++			const row = document.createElement('span');
++			row.className = 'bold-initial-tree-row';
++			row.style.width = `${52 + ((index * 17) % 38)}%`;
++			explorer.append(row);
+ 		}
++
++		const topbar = document.createElement('header');
++		topbar.className = 'bold-initial-topbar';
++		const tab = document.createElement('span');
++		tab.className = 'bold-initial-tab';
++		tab.textContent = 'Welcome';
++		topbar.append(tab);
++
++		const content = document.createElement('main');
++		content.className = 'bold-initial-content';
++		const mark = document.createElement('span');
++		mark.className = 'bold-initial-mark';
++		mark.textContent = 'B';
++		const title = document.createElement('strong');
++		title.textContent = 'Bold Code';
++		const detail = document.createElement('span');
++		detail.textContent = '正在连接工作区服务…';
++		content.append(mark, title, detail);
++
++		splash.append(rail, explorer, topbar, content);
++		window.document.body.appendChild(splash);
+ 	}
+ 
+ 	//#endregion
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+index c550019..0730af6 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+@@ -16,16 +16,11 @@ import { IProductService } from '../../../../platform/product/common/productServ
+ import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import {
+ 	CLAUDE_EXTENSION_ID, CODEX_ENV_KEY, CODEX_PROVIDER_ID, CODEX_EXTENSION_ID,
+-	AiHubMode, IAiConfigService, IAiHubState, IAiProviderSettings
++	AiHubMode, AiHubProvider, IAiConfigService, IAiHubState, IAiProviderSettings
+ } from './aiHubTypes.js';
+ 
+ const AI_HUB_MODE_STORAGE_KEY = 'aiHub.mode';
+-const AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY = 'aiHub.editModeExtensionEnablement';
+-
+-interface IAiHubEditEnablementSnapshot {
+-	readonly claudeEnabled: boolean;
+-	readonly codexEnabled: boolean;
+-}
++const AI_HUB_EDIT_CHAT_PROVIDER_STORAGE_KEY = 'aiHub.editChatProvider';
+ 
+ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnvironmentContributor {
+ 
+@@ -79,39 +74,20 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 		return this.extensionsWorkbenchService.local.find(e => areSameExtensions(e.identifier, { id }));
+ 	}
+ 
+-	private isExtensionEnabled(id: string): boolean {
+-		const extension = this.findExtension(id);
+-		return !!extension?.local && this.extensionEnablementService.isEnabled(extension.local);
+-	}
+-
+ 	private getMode(): AiHubMode {
+ 		const mode = this.storageService.get(AI_HUB_MODE_STORAGE_KEY, StorageScope.PROFILE, 'edit');
+ 		return mode === 'claudeAgent' || mode === 'codexAgent' ? mode : 'edit';
+ 	}
+ 
+-	private getEditEnablementSnapshot(): IAiHubEditEnablementSnapshot | undefined {
+-		const raw = this.storageService.get(AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY, StorageScope.PROFILE);
+-		if (!raw) {
+-			return undefined;
+-		}
+-
+-		try {
+-			const parsed = JSON.parse(raw) as IAiHubEditEnablementSnapshot;
+-			return {
+-				claudeEnabled: !!parsed.claudeEnabled,
+-				codexEnabled: !!parsed.codexEnabled,
+-			};
+-		} catch {
+-			return undefined;
++	private getEditChatProvider(): AiHubProvider {
++		const provider = this.storageService.get(AI_HUB_EDIT_CHAT_PROVIDER_STORAGE_KEY, StorageScope.PROFILE);
++		if (provider === 'claude' || provider === 'codex') {
++			return provider;
+ 		}
+-	}
+ 
+-	private storeCurrentEditEnablementSnapshot(): void {
+-		const snapshot: IAiHubEditEnablementSnapshot = {
+-			claudeEnabled: this.isExtensionEnabled(CLAUDE_EXTENSION_ID),
+-			codexEnabled: this.isExtensionEnabled(CODEX_EXTENSION_ID),
+-		};
+-		this.storageService.store(AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY, JSON.stringify(snapshot), StorageScope.PROFILE, StorageTarget.USER);
++		// Preserve the user's last focused Agent as the initial split-view choice when
++		// migrating profiles that predate the dedicated editor-chat preference.
++		return this.getMode() === 'codexAgent' ? 'codex' : 'claude';
+ 	}
+ 
+ 	async getState(): Promise<IAiHubState> {
+@@ -136,6 +112,7 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 			claudeEnabled: !!claudeExt?.local && this.extensionEnablementService.isEnabled(claudeExt.local),
+ 			codexEnabled: !!codexExt?.local && this.extensionEnablementService.isEnabled(codexExt.local),
+ 			mode: this.getMode(),
++			editChatProvider: this.getEditChatProvider(),
+ 			gatewayUrl: this.productService.aiGatewayUrl ?? '',
+ 		};
+ 	}
+@@ -146,41 +123,26 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 			this.logService.warn(`[aiHub] cannot toggle unknown extension ${id}`);
+ 			return;
+ 		}
++		if (!!extension.local && this.extensionEnablementService.isEnabled(extension.local) === enabled) {
++			return;
++		}
+ 		await this.extensionsWorkbenchService.setEnablement(extension, enabled ? EnablementState.EnabledGlobally : EnablementState.DisabledGlobally);
+ 	}
+ 
+ 	async setMode(mode: AiHubMode): Promise<void> {
+-		const previousMode = this.getMode();
+-		if (previousMode === 'edit' && mode !== 'edit') {
+-			this.storeCurrentEditEnablementSnapshot();
+-		}
+-
+ 		this.storageService.store(AI_HUB_MODE_STORAGE_KEY, mode, StorageScope.PROFILE, StorageTarget.USER);
+ 
+-		if (mode === 'claudeAgent') {
+-			await Promise.all([
+-				this.setExtensionEnabled(CLAUDE_EXTENSION_ID, true),
+-				this.setExtensionEnabled(CODEX_EXTENSION_ID, false),
+-			]);
+-			return;
+-		}
+-
+-		if (mode === 'codexAgent') {
+-			await Promise.all([
+-				this.setExtensionEnabled(CLAUDE_EXTENSION_ID, false),
+-				this.setExtensionEnabled(CODEX_EXTENSION_ID, true),
+-			]);
+-			return;
+-		}
++		// Both renderers stay resident in the shared backend kernel. A mode switch now
++		// only changes which registered Webview container is visible; disabling either
++		// extension would tear down its provider and force an expensive window reload.
++		await Promise.all([
++			this.setExtensionEnabled(CLAUDE_EXTENSION_ID, true),
++			this.setExtensionEnabled(CODEX_EXTENSION_ID, true),
++		]);
++	}
+ 
+-		const snapshot = this.getEditEnablementSnapshot();
+-		if (snapshot) {
+-			await Promise.all([
+-				this.setExtensionEnabled(CLAUDE_EXTENSION_ID, snapshot.claudeEnabled),
+-				this.setExtensionEnabled(CODEX_EXTENSION_ID, snapshot.codexEnabled),
+-			]);
+-			this.storageService.remove(AI_HUB_EDIT_ENABLEMENT_STORAGE_KEY, StorageScope.PROFILE);
+-		}
++	async setEditChatProvider(provider: AiHubProvider): Promise<void> {
++		this.storageService.store(AI_HUB_EDIT_CHAT_PROVIDER_STORAGE_KEY, provider, StorageScope.PROFILE, StorageTarget.USER);
+ 	}
+ 
+ 	async saveClaudeSettings(settings: IAiProviderSettings): Promise<void> {
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index 7970c79..d15a6b6 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -4,40 +4,168 @@
+  *--------------------------------------------------------------------------------------------*/
+ 
+ import { localize2 } from '../../../../nls.js';
+-import './media/modernWorkbench.css';
+-import { Registry } from '../../../../platform/registry/common/platform.js';
++import './media/boldFrontend.css';
+ import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+ import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+-import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
++import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
+ import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
+ import { Codicon } from '../../../../base/common/codicons.js';
+-import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+-import { Extensions as WorkbenchExtensions, IWorkbenchContributionsRegistry, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+-import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
++import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
++import { CodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/codeEditorWidget.js';
++import { ILanguageService } from '../../../../editor/common/languages/language.js';
++import { IModelService } from '../../../../editor/common/services/model.js';
++import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
++import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
+ import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
++import { IThemeService } from '../../../../platform/theme/common/themeService.js';
++import { ILogService } from '../../../../platform/log/common/log.js';
++import { BoldFrontendApp } from '../frontend/boldFrontendApp.js';
+ import { AiConfigService } from './aiConfigService.js';
+-import { AiHubDrawerService } from './aiHubDrawerService.js';
+ import { AiHubModeController } from './aiHubModeController.js';
+-import { AI_GATEWAY_OPEN_COMMAND_ID, AI_HUB_OPEN_COMMAND_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController, MODERN_WORKBENCH_CLASS } from './aiHubTypes.js';
++import { AI_GATEWAY_OPEN_COMMAND_ID, AI_HUB_OPEN_COMMAND_ID, BOLD_FRONTEND_ACTIVE_CLASS, BOLD_FRONTEND_BOOTSTRAP_CLASS, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
++import { BoldFrontendWorkbenchBridge } from './boldFrontendWorkbenchBridge.js';
++import { getSimpleCodeEditorWidgetOptions } from '../../codeEditor/browser/simpleEditorOptions.js';
+ 
+-const AI_HUB_FIRST_RUN_STORAGE_KEY = 'aiHub.firstRunHandled';
++/**
++ * Installed while the workbench module is being evaluated, before VS Code creates its parts.
++ * The actual frontend is hydrated later, once the backend services are ready.
++ */
++function installBoldFrontendBootstrap(): HTMLElement {
++	const document = mainWindow.document;
++	document.documentElement.classList.add(BOLD_FRONTEND_BOOTSTRAP_CLASS);
++	document.body.classList.add(BOLD_FRONTEND_ACTIVE_CLASS);
++	// Replace the early renderer splash with the same persistent shell geometry.
++	// Keeping both nodes alive caused duplicate frames and a visible startup jump.
++	document.getElementById('monaco-parts-splash')?.remove();
++	for (const element of document.querySelectorAll('.initialShellColors')) {
++		element.remove();
++	}
++
++	const screen = document.createElement('div');
++	screen.className = 'bold-frontend-bootstrap';
++	screen.setAttribute('role', 'progressbar');
++	screen.setAttribute('aria-label', 'Bold Code 正在启动');
++
++	const rail = document.createElement('div');
++	rail.className = 'bold-frontend-bootstrap__rail';
++	const brand = document.createElement('span');
++	brand.className = 'bold-frontend-bootstrap__brand';
++	brand.textContent = 'B';
++	rail.append(brand);
++	for (const label of ['▱', '⌕', '>_', 'C', 'X']) {
++		const item = document.createElement('span');
++		item.className = 'bold-frontend-bootstrap__rail-item';
++		item.textContent = label;
++		rail.append(item);
++	}
++
++	const explorer = document.createElement('aside');
++	explorer.className = 'bold-frontend-bootstrap__explorer';
++	const eyebrow = document.createElement('span');
++	eyebrow.className = 'bold-frontend-bootstrap__eyebrow';
++	eyebrow.textContent = 'WORKSPACE';
++	const workspace = document.createElement('strong');
++	workspace.textContent = 'Bold Code';
++	explorer.append(eyebrow, workspace);
++	for (let index = 0; index < 8; index++) {
++		const row = document.createElement('span');
++		row.className = 'bold-frontend-bootstrap__tree-row';
++		row.style.setProperty('--row-width', `${52 + ((index * 17) % 38)}%`);
++		explorer.append(row);
++	}
++
++	const topbar = document.createElement('header');
++	topbar.className = 'bold-frontend-bootstrap__topbar';
++	const tab = document.createElement('span');
++	tab.className = 'bold-frontend-bootstrap__tab';
++	tab.textContent = 'Welcome';
++	topbar.append(tab);
++
++	const content = document.createElement('main');
++	content.className = 'bold-frontend-bootstrap__content';
++	const mark = document.createElement('span');
++	mark.className = 'bold-frontend-bootstrap__mark';
++	mark.textContent = 'B';
++	const title = document.createElement('strong');
++	title.textContent = 'Bold Code';
++	const detail = document.createElement('span');
++	detail.textContent = '正在连接工作区服务…';
++	content.append(mark, title, detail);
++
++	screen.append(rail, explorer, topbar, content);
++	document.body.append(screen);
++	return screen;
++}
++
++const boldFrontendBootstrap = installBoldFrontendBootstrap();
++let activeBoldFrontendApp: BoldFrontendApp | undefined;
+ 
+-class ModernWorkbenchContribution extends Disposable {
+-	static readonly ID = 'workbench.contrib.modernWorkbench';
++class BoldFrontendContribution extends Disposable {
++	static readonly ID = 'workbench.contrib.boldFrontend';
+ 
+-	constructor() {
++	constructor(
++		@IInstantiationService private readonly instantiationService: IInstantiationService,
++		@IAiHubModeController private readonly modeController: IAiHubModeController,
++		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
++		@IThemeService private readonly themeService: IThemeService,
++		@ILogService private readonly logService: ILogService,
++		@IModelService private readonly modelService: IModelService,
++		@ILanguageService private readonly languageService: ILanguageService,
++	) {
+ 		super();
+-		mainWindow.document.body.classList.add(MODERN_WORKBENCH_CLASS);
+-		this._register(toDisposable(() => mainWindow.document.body.classList.remove(MODERN_WORKBENCH_CLASS)));
++		void this.initialize().catch(error => {
++			this.logService.error('[aiHub] failed to initialize the Bold frontend', error);
++			boldFrontendBootstrap.setAttribute('aria-label', 'Bold Code 启动失败');
++			const detail = boldFrontendBootstrap.querySelector('.bold-frontend-bootstrap__content > span:last-child');
++			detail?.replaceChildren(mainWindow.document.createTextNode('界面启动失败，请重新打开应用。'));
++		});
++	}
++
++	private async initialize(): Promise<void> {
++		const bridge = this._register(this.instantiationService.createInstance(BoldFrontendWorkbenchBridge));
++		const app = this._register(new BoldFrontendApp(mainWindow.document, bridge, {
++			createEditor: (host, options) => this.instantiationService.createInstance(CodeEditorWidget, host, options, getSimpleCodeEditorWidgetOptions()),
++			createModel: (contents, languageId, uri) => this.modelService.createModel(contents, this.languageService.createById(languageId), uri),
++		}));
++		activeBoldFrontendApp = app;
++		mainWindow.document.body.append(app.element);
++		this._register(toDisposable(() => {
++			if (activeBoldFrontendApp === app) {
++				activeBoldFrontendApp = undefined;
++			}
++		}));
++		this.applyThemeVariables();
++		this._register(this.themeService.onDidColorThemeChange(() => this.applyThemeVariables()));
++		await this.modeController.initialize();
++		await app.start();
++		this.layoutService.layout();
++		// Keep the native renderer fail-closed until the replacement shell and the
++		// selected extension portal have both completed their first layout.
++		await new Promise<void>(resolve => mainWindow.requestAnimationFrame(() => resolve()));
++		boldFrontendBootstrap.remove();
++		mainWindow.document.documentElement.classList.remove(BOLD_FRONTEND_BOOTSTRAP_CLASS);
++	}
++
++	private applyThemeVariables(): void {
++		const workbench = mainWindow.document.querySelector<HTMLElement>('.monaco-workbench');
++		if (!workbench) {
++			return;
++		}
++		const source = mainWindow.getComputedStyle(workbench);
++		for (let index = 0; index < source.length; index++) {
++			const property = source.item(index);
++			if (property.startsWith('--vscode-')) {
++				mainWindow.document.body.style.setProperty(property, source.getPropertyValue(property));
++			}
++		}
+ 	}
+ }
+ 
+ registerSingleton(IAiConfigService, AiConfigService, InstantiationType.Delayed);
+ registerSingleton(IAiExtensionHostEnvironmentContributor, AiConfigService, InstantiationType.Delayed);
+ registerSingleton(IAiHubModeController, AiHubModeController, InstantiationType.Delayed);
+-registerSingleton(IAiHubDrawerService, AiHubDrawerService, InstantiationType.Delayed);
+ 
+ MenuRegistry.appendMenuItem(MenuId.TitleBar, {
+ 	command: {
+@@ -73,34 +201,12 @@ MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
+ 	},
+ });
+ 
+-CommandsRegistry.registerCommand(AI_GATEWAY_OPEN_COMMAND_ID, accessor => {
+-	return accessor.get(IAiHubDrawerService).toggleGateway();
++CommandsRegistry.registerCommand(AI_GATEWAY_OPEN_COMMAND_ID, () => {
++	return activeBoldFrontendApp?.openGateway();
+ });
+ 
+-CommandsRegistry.registerCommand(AI_HUB_OPEN_COMMAND_ID, accessor => {
+-	return accessor.get(IAiHubDrawerService).toggleSettings();
++CommandsRegistry.registerCommand(AI_HUB_OPEN_COMMAND_ID, () => {
++	return activeBoldFrontendApp?.toggleSettings();
+ });
+ 
+-class AiHubFirstRunContribution extends Disposable {
+-	static readonly ID = 'workbench.contrib.aiHubFirstRun';
+-
+-	constructor(
+-		@IStorageService private readonly storageService: IStorageService,
+-		@ICommandService private readonly commandService: ICommandService,
+-		@IAiHubModeController private readonly modeController: IAiHubModeController,
+-	) {
+-		super();
+-		void this.initialize();
+-	}
+-
+-	private async initialize(): Promise<void> {
+-		await this.modeController.initialize();
+-		if (!this.storageService.getBoolean(AI_HUB_FIRST_RUN_STORAGE_KEY, StorageScope.APPLICATION, false)) {
+-			this.storageService.store(AI_HUB_FIRST_RUN_STORAGE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+-			await this.commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
+-		}
+-	}
+-}
+-
+-Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(AiHubFirstRunContribution, LifecyclePhase.Restored);
+-registerWorkbenchContribution2(ModernWorkbenchContribution.ID, ModernWorkbenchContribution, WorkbenchPhase.BlockStartup);
++registerWorkbenchContribution2(BoldFrontendContribution.ID, BoldFrontendContribution, WorkbenchPhase.AfterRestored);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index 5bcea80..b75f7fc 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -3,21 +3,28 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
+-import { RunOnceScheduler } from '../../../../base/common/async.js';
++import { RunOnceScheduler, timeout } from '../../../../base/common/async.js';
+ import { Disposable } from '../../../../base/common/lifecycle.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+ import { ICommandService } from '../../../../platform/commands/common/commands.js';
+-import { IConfigurationService, ConfigurationTarget } from '../../../../platform/configuration/common/configuration.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { ViewContainerLocation } from '../../../common/views.js';
+-import { IWorkbenchLayoutService, LayoutSettings, Parts } from '../../../services/layout/browser/layoutService.js';
++import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+ import { IViewsService } from '../../../services/views/common/viewsService.js';
+-import { AI_HUB_AGENT_MODE_CLASS, AiHubMode, IAiConfigService, IAiHubModeController, MODERN_WORKBENCH_CLASS } from './aiHubTypes.js';
++import { AI_HUB_AGENT_MODE_CLASS, AI_HUB_EDIT_CHAT_MODE_CLASS, AiHubMode, AiHubProvider, BOLD_FRONTEND_ACTIVE_CLASS, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ 
+ const AI_HUB_LAYOUT_STORAGE_KEY = 'aiHub.editModeLayout';
+ const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar-secondary', 'claude-sidebar'];
+ const CODEX_AGENT_CONTAINER_IDS = ['codexSecondaryViewContainer', 'codexViewContainer'];
++const CLAUDE_AGENT_VIEW_IDS = ['claudeVSCodeSidebarSecondary', 'claudeVSCodeSidebar'];
++const CODEX_AGENT_VIEW_IDS = ['chatgpt.sidebarSecondaryView', 'chatgpt.sidebarView'];
++const AGENT_SURFACE_RETRY_COUNT = 50;
++const AGENT_SURFACE_RETRY_DELAY = 100;
++const ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS = 'bold-agent-webview-portal';
++
++type AiHubAgentMode = Exclude<AiHubMode, 'edit'>;
++type AgentSurfacePresentation = 'editChat' | 'agent';
+ 
+ interface IAiHubLayoutSnapshot {
+ 	readonly activityBarVisible: boolean;
+@@ -34,6 +41,8 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 	declare readonly _serviceBrand: undefined;
+ 
+ 	private currentMode: AiHubMode = 'edit';
++	private editChatProvider: AiHubProvider = 'claude';
++	private surfaceGeneration = 0;
+ 	private initialization: Promise<void> | undefined;
+ 	private modeTransition: Promise<void> = Promise.resolve();
+ 	private applyingLayout = false;
+@@ -43,7 +52,6 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		@IAiConfigService private readonly aiConfigService: IAiConfigService,
+ 		@IStorageService private readonly storageService: IStorageService,
+ 		@ICommandService private readonly commandService: ICommandService,
+-		@IConfigurationService private readonly configurationService: IConfigurationService,
+ 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+ 		@IViewsService private readonly viewsService: IViewsService,
+ 		@ILogService private readonly logService: ILogService,
+@@ -51,17 +59,22 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		super();
+ 
+ 		this._register(this.layoutService.onDidChangePartVisibility(event => {
+-			if (this.currentMode !== 'edit' && event.visible && this.isForbiddenPart(event.partId)) {
++			const presentation = this.getSurfacePresentation();
++			if ((event.visible && this.isForbiddenPart(event.partId, presentation))
++				|| (presentation === 'editChat' && event.partId === Parts.EDITOR_PART && !event.visible)) {
+ 				this.enforcementScheduler.schedule();
+ 			}
+ 		}));
+ 		this._register(this.layoutService.onDidChangeAuxiliaryBarMaximized(() => {
+-			if (this.currentMode !== 'edit') {
++			this.enforcementScheduler.schedule();
++		}));
++		this._register(this.viewsService.onDidChangeViewContainerVisibility(event => {
++			if (event.visible && !this.getAgentContainerIds(this.getActiveAgentMode()).includes(event.id)) {
+ 				this.enforcementScheduler.schedule();
+ 			}
+ 		}));
+-		this._register(this.viewsService.onDidChangeViewContainerVisibility(event => {
+-			if (this.currentMode !== 'edit' && event.visible && !this.getAgentContainerIds(this.currentMode).includes(event.id)) {
++		this._register(this.viewsService.onDidChangeViewVisibility(event => {
++			if (this.getAgentViewIds(this.getActiveAgentMode()).includes(event.id) && !event.visible) {
+ 				this.enforcementScheduler.schedule();
+ 			}
+ 		}));
+@@ -81,10 +94,25 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 	private async doInitialize(): Promise<void> {
+ 		const state = await this.aiConfigService.getState();
+ 		this.currentMode = state.mode;
+-		await this.applyModeLayout(state.mode, state.mode);
+-		if (state.mode !== 'edit') {
+-			this.enforcementScheduler.schedule();
++		this.editChatProvider = state.editChatProvider;
++		// Migrate old profiles that persisted one renderer as disabled. Both
++		// extensions remain resident so subsequent switches are view-only.
++		await this.aiConfigService.setMode(state.mode);
++		this.applyingLayout = true;
++		try {
++			await this.applyModeLayout(state.mode);
++		} catch (error) {
++			if (state.mode === 'edit') {
++				throw error;
++			}
++			this.logService.warn('[aiHub] stored agent mode was unavailable; falling back to edit mode', error);
++			this.currentMode = 'edit';
++			await this.aiConfigService.setMode('edit');
++			await this.applyModeLayout('edit');
++		} finally {
++			this.applyingLayout = false;
+ 		}
++		this.enforcementScheduler.schedule();
+ 	}
+ 
+ 	setMode(mode: AiHubMode): Promise<void> {
+@@ -107,29 +135,76 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 
+ 		this.applyingLayout = true;
+ 		try {
+-			if (mode === 'edit') {
+-				// Keep enforcing the current Agent layout while extension enablement changes.
+-				// The final edit layout is then restored synchronously in one render turn.
+-				await this.aiConfigService.setMode(mode);
+-				this.currentMode = mode;
+-			} else {
+-				this.currentMode = mode;
+-				await this.prepareAgentSurface();
+-				await this.aiConfigService.setMode(mode);
+-			}
+-			await this.applyModeLayout(mode, previousMode);
++			this.currentMode = mode;
++			await this.aiConfigService.setMode(mode);
++			await this.applyModeLayout(mode);
+ 		} catch (error) {
+ 			this.currentMode = previousMode;
++			try {
++				await this.aiConfigService.setMode(previousMode);
++				await this.applyModeLayout(previousMode);
++			} catch (rollbackError) {
++				this.logService.warn('[aiHub] failed to restore the previous mode after a transition error', rollbackError);
++			}
++			throw error;
++		} finally {
+ 			this.applyingLayout = false;
++		}
++
++		this.enforcementScheduler.schedule();
++	}
++
++	setEditChatProvider(provider: AiHubProvider): Promise<void> {
++		const transition = this.modeTransition.then(() => this.doSetEditChatProvider(provider));
++		this.modeTransition = transition.then(() => undefined, () => undefined);
++		return transition;
++	}
++
++	private async doSetEditChatProvider(provider: AiHubProvider): Promise<void> {
++		await this.initialize();
++		const previousProvider = this.editChatProvider;
++		if (provider === previousProvider) {
++			this.enforcementScheduler.schedule();
++			return;
++		}
++
++		this.applyingLayout = true;
++		try {
++			this.editChatProvider = provider;
++			await this.aiConfigService.setEditChatProvider(provider);
++			if (this.currentMode === 'edit') {
++				await this.applyModeLayout('edit');
++			}
++		} catch (error) {
++			this.editChatProvider = previousProvider;
++			try {
++				await this.aiConfigService.setEditChatProvider(previousProvider);
++				if (this.currentMode === 'edit') {
++					await this.applyModeLayout('edit');
++				}
++			} catch (rollbackError) {
++				this.logService.warn('[aiHub] failed to restore the previous editor chat provider', rollbackError);
++			}
+ 			throw error;
++		} finally {
++			this.applyingLayout = false;
+ 		}
+ 
++		this.enforcementScheduler.schedule();
++	}
++
++	private getSurfacePresentation(mode: AiHubMode = this.currentMode): AgentSurfacePresentation {
++		return mode === 'edit' ? 'editChat' : 'agent';
++	}
++
++	private getActiveAgentMode(mode: AiHubMode = this.currentMode): AiHubAgentMode {
+ 		if (mode !== 'edit') {
+-			this.enforcementScheduler.schedule();
++			return mode;
+ 		}
++		return this.editChatProvider === 'claude' ? 'claudeAgent' : 'codexAgent';
+ 	}
+ 
+-	private getAgentContainerIds(mode: AiHubMode): readonly string[] {
++	private getAgentContainerIds(mode: AiHubAgentMode): readonly string[] {
+ 		if (mode === 'claudeAgent') {
+ 			return CLAUDE_AGENT_CONTAINER_IDS;
+ 		}
+@@ -139,6 +214,16 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		return [];
+ 	}
+ 
++	private getAgentViewIds(mode: AiHubAgentMode): readonly string[] {
++		if (mode === 'claudeAgent') {
++			return CLAUDE_AGENT_VIEW_IDS;
++		}
++		if (mode === 'codexAgent') {
++			return CODEX_AGENT_VIEW_IDS;
++		}
++		return [];
++	}
++
+ 	private captureEditLayout(): IAiHubLayoutSnapshot {
+ 		return {
+ 			activityBarVisible: this.layoutService.isVisible(Parts.ACTIVITYBAR_PART),
+@@ -164,94 +249,151 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		}
+ 	}
+ 
+-	private async openFirstAvailableViewContainer(containerIds: readonly string[]): Promise<void> {
++	private async openFirstAvailableViewContainer(containerIds: readonly string[], focus: boolean): Promise<boolean> {
+ 		for (const id of containerIds) {
+ 			try {
+-				const paneComposite = await this.viewsService.openViewContainer(id, true);
++				const paneComposite = await this.viewsService.openViewContainer(id, focus);
+ 				if (paneComposite) {
+-					return;
++					return true;
+ 				}
+ 			} catch {
+ 				// Agent containers can be conditional; try the next known location.
+ 			}
+ 		}
++		return false;
+ 	}
+ 
+-	private async restoreEditLayout(): Promise<void> {
+-		await this.setAgentChrome(false);
+-		this.layoutService.setAuxiliaryBarMaximized(false);
+-		const snapshot = this.readLayoutSnapshot();
+-		if (!snapshot) {
+-			this.layoutService.setPartHidden(false, Parts.ACTIVITYBAR_PART);
+-			this.layoutService.setPartHidden(false, Parts.EDITOR_PART);
+-			this.layoutService.setPartHidden(true, Parts.PANEL_PART);
+-			return;
++	private async openFirstAvailableView(viewIds: readonly string[], focus: boolean): Promise<boolean> {
++		for (const id of viewIds) {
++			try {
++				const view = await this.viewsService.openView(id, focus);
++				if (view) {
++					return true;
++				}
++			} catch {
++				// The extension may still be registering its Webview provider.
++			}
+ 		}
++		return false;
++	}
+ 
+-		this.layoutService.setPartHidden(!snapshot.activityBarVisible, Parts.ACTIVITYBAR_PART);
+-		this.layoutService.setPartHidden(!snapshot.editorVisible, Parts.EDITOR_PART);
+-		this.layoutService.setPartHidden(!snapshot.panelVisible, Parts.PANEL_PART);
+-		this.layoutService.setPartHidden(!snapshot.sideBarVisible, Parts.SIDEBAR_PART);
+-		this.layoutService.setPartHidden(!snapshot.auxiliaryBarVisible, Parts.AUXILIARYBAR_PART);
++	private async prepareAgentSurface(presentation: AgentSurfacePresentation): Promise<void> {
++		this.setSurfacePresentation(presentation);
++		this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
++		this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++		this.layoutService.setAuxiliaryBarMaximized(presentation === 'agent');
++		this.hideForbiddenParts(presentation);
++		if (presentation === 'editChat') {
++			this.storageService.remove(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
++		}
+ 		this.layoutService.layout();
++	}
++
++	private async applyAgentLayout(mode: AiHubAgentMode, presentation: AgentSurfacePresentation, generation: number): Promise<void> {
++		await this.prepareAgentSurface(presentation);
++		let commandOpened = false;
++		const focus = presentation === 'agent';
+ 
+-		if (snapshot.sideBarVisible && snapshot.sideBarContainerId) {
+-			await this.viewsService.openViewContainer(snapshot.sideBarContainerId, false);
++		for (let attempt = 0; attempt < AGENT_SURFACE_RETRY_COUNT && this.isSurfaceRequestCurrent(mode, presentation, generation); attempt++) {
++			await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), focus);
++			await this.openFirstAvailableView(this.getAgentViewIds(mode), focus);
++			if (this.isAgentSurfaceReady(mode, presentation)) {
++				this.hideForbiddenParts(presentation);
++				this.layoutService.layout();
++				return;
++			}
++
++			if (!commandOpened) {
++				try {
++					await this.commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
++					commandOpened = true;
++				} catch (error) {
++					if (attempt === AGENT_SURFACE_RETRY_COUNT - 1) {
++						this.logService.warn('[aiHub] failed to open agent sidebar via extension command', error);
++					}
++				}
++			}
++
++			await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), focus);
++			await this.openFirstAvailableView(this.getAgentViewIds(mode), focus);
++			if (this.isAgentSurfaceReady(mode, presentation)) {
++				this.hideForbiddenParts(presentation);
++				this.layoutService.layout();
++				return;
++			}
++			await timeout(AGENT_SURFACE_RETRY_DELAY);
+ 		}
+-		if (snapshot.auxiliaryBarVisible && snapshot.auxiliaryBarContainerId) {
+-			await this.viewsService.openViewContainer(snapshot.auxiliaryBarContainerId, false);
++
++		if (!this.isSurfaceRequestCurrent(mode, presentation, generation)) {
++			return;
+ 		}
+ 
+-		this.storageService.remove(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
+-		this.layoutService.layout();
++		this.clearAgentPortals();
++		throw new Error(`The ${mode} extension view did not become visible.`);
+ 	}
+ 
+-	private async prepareAgentSurface(): Promise<void> {
+-		await this.setAgentChrome(true);
+-		this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+-		this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+-		this.layoutService.setAuxiliaryBarMaximized(true);
+-		this.hideForbiddenParts();
+-		this.layoutService.layout();
++	private async applyModeLayout(mode: AiHubMode): Promise<void> {
++		const presentation = this.getSurfacePresentation(mode);
++		const agentMode = this.getActiveAgentMode(mode);
++		const generation = ++this.surfaceGeneration;
++		await this.applyAgentLayout(agentMode, presentation, generation);
+ 	}
+ 
+-	private async applyAgentLayout(mode: AiHubMode): Promise<void> {
+-		await this.prepareAgentSurface();
++	private isSurfaceRequestCurrent(mode: AiHubAgentMode, presentation: AgentSurfacePresentation, generation: number): boolean {
++		return generation === this.surfaceGeneration
++			&& mode === this.getActiveAgentMode()
++			&& presentation === this.getSurfacePresentation();
++	}
+ 
+-		try {
+-			await this.commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
+-		} catch (error) {
+-			this.logService.warn('[aiHub] failed to open agent sidebar via extension command', error);
++	private isAgentSurfaceReady(mode: AiHubAgentMode, presentation: AgentSurfacePresentation): boolean {
++		const extensionId = mode === 'claudeAgent' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
++		const webviewFrame = Array.from(mainWindow.document.querySelectorAll<HTMLIFrameElement>('iframe.webview.ready')).find(frame => {
++			const overlay = frame.parentElement;
++			return frame.src.includes(`extensionId=${extensionId}`)
++				&& overlay?.style.visibility === 'visible'
++				&& this.isInViewport(frame);
++		});
++		const containerMounted = this.getAgentContainerIds(mode).some(id => {
++			const container = mainWindow.document.getElementById(`workbench.view.extension.${id}`);
++			return !!container && this.isInViewport(container);
++		});
++		const portal = webviewFrame?.parentElement?.parentElement;
++		const workbench = mainWindow.document.querySelector('.monaco-workbench');
++		if (webviewFrame && containerMounted && portal?.parentElement === workbench) {
++			this.arrangeAgentContainer(mode, presentation);
++			this.activateAgentPortal(portal);
++			return true;
+ 		}
++		return false;
++	}
+ 
+-		await this.prepareAgentSurface();
+-		await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode));
+-		if (!this.arrangeAgentContainer(mode)) {
+-			this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+-			this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+-			this.layoutService.setAuxiliaryBarMaximized(true);
+-		}
+-		this.hideForbiddenParts();
+-		this.layoutService.layout();
++	private isInViewport(element: HTMLElement): boolean {
++		const bounds = element.getBoundingClientRect();
++		return bounds.width > 0
++			&& bounds.height > 0
++			&& bounds.right > 0
++			&& bounds.bottom > 0
++			&& bounds.left < mainWindow.innerWidth
++			&& bounds.top < mainWindow.innerHeight
++			&& mainWindow.getComputedStyle(element).display !== 'none';
+ 	}
+ 
+-	private async applyModeLayout(mode: AiHubMode, previousMode: AiHubMode): Promise<void> {
+-		this.applyingLayout = true;
+-		try {
+-			if (mode === 'edit') {
+-				if (previousMode !== 'edit' || this.readLayoutSnapshot()) {
+-					await this.restoreEditLayout();
+-				}
+-				return;
++	private activateAgentPortal(portal: HTMLElement): void {
++		for (const activePortal of mainWindow.document.querySelectorAll<HTMLElement>(`.${ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS}`)) {
++			if (activePortal !== portal) {
++				activePortal.classList.remove(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
+ 			}
++		}
++		portal.classList.add(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
++	}
+ 
+-			await this.applyAgentLayout(mode);
+-		} finally {
+-			this.applyingLayout = false;
++	private clearAgentPortals(): void {
++		for (const portal of mainWindow.document.querySelectorAll<HTMLElement>(`.${ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS}`)) {
++			portal.classList.remove(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
+ 		}
+ 	}
+ 
+-	private arrangeAgentContainer(mode: AiHubMode): boolean {
++	private arrangeAgentContainer(mode: AiHubAgentMode, presentation: AgentSurfacePresentation): boolean {
+ 		const agentContainerIds = new Set(this.getAgentContainerIds(mode));
+ 		const sideBarContainerId = this.viewsService.getVisibleViewContainer(ViewContainerLocation.Sidebar)?.id;
+ 		const auxiliaryBarContainerId = this.viewsService.getVisibleViewContainer(ViewContainerLocation.AuxiliaryBar)?.id;
+@@ -260,13 +402,15 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			this.layoutService.setAuxiliaryBarMaximized(false);
+ 			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
+ 			this.layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
++			this.hideForbiddenParts(presentation);
+ 			return true;
+ 		}
+ 
+ 		if (auxiliaryBarContainerId && agentContainerIds.has(auxiliaryBarContainerId)) {
+ 			this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+ 			this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+-			this.layoutService.setAuxiliaryBarMaximized(true);
++			this.layoutService.setAuxiliaryBarMaximized(presentation === 'agent');
++			this.hideForbiddenParts(presentation);
+ 			return true;
+ 		}
+ 
+@@ -274,9 +418,6 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 	}
+ 
+ 	private async enforceAgentLayout(): Promise<void> {
+-		if (this.currentMode === 'edit') {
+-			return;
+-		}
+ 		if (this.applyingLayout) {
+ 			this.enforcementScheduler.schedule(16);
+ 			return;
+@@ -284,44 +425,40 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 
+ 		this.applyingLayout = true;
+ 		try {
+-			const mode = this.currentMode;
+-			if (!this.arrangeAgentContainer(mode)) {
+-				await this.applyAgentLayout(mode);
++			const topMode = this.currentMode;
++			const mode = this.getActiveAgentMode(topMode);
++			const presentation = this.getSurfacePresentation(topMode);
++			if (!this.isAgentSurfaceReady(mode, presentation)) {
++				await this.applyModeLayout(topMode);
+ 			}
+-			if (this.currentMode === mode) {
+-				this.hideForbiddenParts();
++			if (this.currentMode === topMode && mode === this.getActiveAgentMode()) {
++				this.hideForbiddenParts(presentation);
+ 				this.layoutService.layout();
+ 			}
++		} catch (error) {
++			this.logService.warn('[aiHub] failed to restore the active agent surface', error);
+ 		} finally {
+ 			this.applyingLayout = false;
+ 		}
+ 	}
+ 
+-	private isForbiddenPart(partId: string): boolean {
+-		return partId === Parts.ACTIVITYBAR_PART || partId === Parts.EDITOR_PART || partId === Parts.PANEL_PART;
++	private isForbiddenPart(partId: string, presentation: AgentSurfacePresentation): boolean {
++		return partId === Parts.ACTIVITYBAR_PART
++			|| partId === Parts.PANEL_PART
++			|| (presentation === 'agent' && partId === Parts.EDITOR_PART);
+ 	}
+ 
+-	private hideForbiddenParts(): void {
++	private hideForbiddenParts(presentation: AgentSurfacePresentation): void {
+ 		this.layoutService.setPartHidden(true, Parts.ACTIVITYBAR_PART);
+ 		this.layoutService.setPartHidden(true, Parts.PANEL_PART);
+-		this.layoutService.setPartHidden(true, Parts.EDITOR_PART);
++		this.layoutService.setPartHidden(presentation === 'agent', Parts.EDITOR_PART);
+ 	}
+ 
+-	private async setAgentChrome(enabled: boolean): Promise<void> {
+-		mainWindow.document.body.classList.toggle(AI_HUB_AGENT_MODE_CLASS, enabled);
+-		// Agent mode is an extension-owned surface. Keep its native UI isolated from the custom Workbench skin.
+-		mainWindow.document.body.classList.toggle(MODERN_WORKBENCH_CLASS, !enabled);
+-		await Promise.all([
+-			this.configurationService.updateValue(
+-				LayoutSettings.LAYOUT_ACTIONS,
+-				enabled ? false : undefined,
+-				ConfigurationTarget.MEMORY
+-			),
+-			this.configurationService.updateValue(
+-				'workbench.statusBar.visible',
+-				enabled ? false : undefined,
+-				ConfigurationTarget.MEMORY
+-			),
+-		]);
++	private setSurfacePresentation(presentation: AgentSurfacePresentation): void {
++		mainWindow.document.body.classList.toggle(AI_HUB_AGENT_MODE_CLASS, presentation === 'agent');
++		mainWindow.document.body.classList.toggle(AI_HUB_EDIT_CHAT_MODE_CLASS, presentation === 'editChat');
++		// The Bold shell remains the window frontend in every mode. Agent modes only contribute
++		// their extension-owned Webview surface inside the shell's content viewport.
++		mainWindow.document.body.classList.add(BOLD_FRONTEND_ACTIVE_CLASS);
+ 	}
+ }
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+index e233496..cff47e3 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+@@ -12,13 +12,16 @@ export const AI_HUB_OPEN_COMMAND_ID = 'aiHub.open';
+ export const AI_GATEWAY_OPEN_COMMAND_ID = 'aiGateway.open';
+ 
+ export const AI_HUB_AGENT_MODE_CLASS = 'ai-hub-agent-mode';
+-export const MODERN_WORKBENCH_CLASS = 'bold-modern-workbench';
++export const AI_HUB_EDIT_CHAT_MODE_CLASS = 'ai-hub-edit-chat-mode';
++export const BOLD_FRONTEND_BOOTSTRAP_CLASS = 'bold-frontend-bootstrapping';
++export const BOLD_FRONTEND_ACTIVE_CLASS = 'bold-independent-frontend';
+ 
+ /** Env var name Codex's custom `model_providers.<id>.env_key` points at. */
+ export const CODEX_PROVIDER_ID = 'ai-hub-gateway';
+ export const CODEX_ENV_KEY = 'CODEX_AI_HUB_API_KEY';
+ 
+ export type AiHubMode = 'edit' | 'claudeAgent' | 'codexAgent';
++export type AiHubProvider = 'claude' | 'codex';
+ 
+ export interface IAiProviderSettings {
+ 	readonly baseUrl: string;
+@@ -34,6 +37,7 @@ export interface IAiHubState {
+ 	readonly claudeEnabled: boolean;
+ 	readonly codexEnabled: boolean;
+ 	readonly mode: AiHubMode;
++	readonly editChatProvider: AiHubProvider;
+ 	readonly gatewayUrl: string;
+ }
+ 
+@@ -47,6 +51,7 @@ export interface IAiHubModeController {
+ 
+ 	initialize(): Promise<void>;
+ 	setMode(mode: AiHubMode): Promise<void>;
++	setEditChatProvider(provider: AiHubProvider): Promise<void>;
+ }
+ 
+ export const IAiHubDrawerService = createDecorator<IAiHubDrawerService>('aiHubDrawerService');
+@@ -69,12 +74,14 @@ export interface IAiConfigService {
+ 	getState(): Promise<IAiHubState>;
+ 
+ 	/**
+-	 * Switches the top-level experience mode. Edit mode restores the AI extension
+-	 * enablement that was active before entering an agent mode; agent modes enable
+-	 * only the selected bundled agent extension.
++	 * Switches the top-level experience mode. Both bundled extensions remain resident;
++	 * the mode controls whether the editor/chat split or one full Agent surface is shown.
+ 	 */
+ 	setMode(mode: AiHubMode): Promise<void>;
+ 
++	/** Persists which bundled extension is shown beside the editor in Edit mode. */
++	setEditChatProvider(provider: AiHubProvider): Promise<void>;
++
+ 	/** Writes `~/.claude/settings.json`'s `env` block, preserving unrelated existing keys. */
+ 	saveClaudeSettings(settings: IAiProviderSettings): Promise<void>;
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+new file mode 100644
+index 0000000..3976425
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -0,0 +1,261 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { mainWindow } from '../../../../base/browser/window.js';
++import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
++import { Disposable } from '../../../../base/common/lifecycle.js';
++import { basename, extname } from '../../../../base/common/resources.js';
++import { VSBuffer } from '../../../../base/common/buffer.js';
++import { URI } from '../../../../base/common/uri.js';
++import { IBrowserViewService, ipcBrowserViewChannelName } from '../../../../platform/browserView/common/browserView.js';
++import { ICommandService } from '../../../../platform/commands/common/commands.js';
++import { INativeEnvironmentService } from '../../../../platform/environment/common/environment.js';
++import { IFileService } from '../../../../platform/files/common/files.js';
++import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
++import { IProductService } from '../../../../platform/product/common/productService.js';
++import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
++import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
++import { IEditorService } from '../../../services/editor/common/editorService.js';
++import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab } from '../frontend/boldFrontendProtocol.js';
++import { IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
++import { BoldGatewayController } from './boldGatewayController.js';
++import { BoldTerminalController } from './boldTerminalController.js';
++
++const FRONTEND_ACTION_COMMANDS: Readonly<Record<BoldFrontendAction, string>> = {
++	commandPalette: 'workbench.action.showCommands',
++	newFile: 'workbench.action.files.newUntitledFile',
++	quickOpen: 'workbench.action.quickOpen',
++	terminal: 'workbench.action.terminal.toggleTerminal',
++};
++
++const NATIVE_WELCOME_EDITOR_TYPE_ID = 'workbench.editors.gettingStartedInput';
++
++const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
++	'.c': 'c', '.cc': 'cpp', '.cpp': 'cpp', '.cs': 'csharp', '.css': 'css', '.go': 'go',
++	'.html': 'html', '.java': 'java', '.js': 'javascript', '.json': 'json', '.jsx': 'javascript',
++	'.md': 'markdown', '.py': 'python', '.rs': 'rust', '.scss': 'scss', '.sh': 'shell', '.sql': 'sql',
++	'.swift': 'swift', '.toml': 'ini', '.ts': 'typescript', '.tsx': 'typescript', '.xml': 'xml',
++	'.yaml': 'yaml', '.yml': 'yaml',
++};
++
++interface IEditorReference {
++	readonly editor: NonNullable<ReturnType<IEditorGroupsService['activeGroup']['getEditorByIndex']>>;
++	readonly groupId: number;
++}
++
++/** VS Code adapter for the independent frontend protocol. */
++export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFrontendBridge {
++
++	private readonly listeners = new Set<(state: IBoldFrontendState) => void>();
++	private readonly editorReferences = new Map<string, IEditorReference>();
++	private stateRequest = 0;
++	private editSurfacePrepared = false;
++	private readonly gatewayController: BoldGatewayController | undefined;
++	private readonly terminalController: BoldTerminalController;
++
++	constructor(
++		@IAiConfigService private readonly aiConfigService: IAiConfigService,
++		@IAiHubModeController private readonly modeController: IAiHubModeController,
++		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
++		@INativeEnvironmentService environmentService: INativeEnvironmentService,
++		@IFileService private readonly fileService: IFileService,
++		@IProductService productService: IProductService,
++		@IMainProcessService mainProcessService: IMainProcessService,
++		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
++		@IEditorService private readonly editorService: IEditorService,
++		@ICommandService private readonly commandService: ICommandService,
++	) {
++		super();
++		const browserViewService = ProxyChannel.toService<IBrowserViewService>(mainProcessService.getChannel(ipcBrowserViewChannelName));
++		this.gatewayController = productService.aiGatewayUrl ? this._register(new BoldGatewayController(
++			mainWindow.document,
++			mainWindow.vscodeWindowId,
++			productService.aiGatewayUrl,
++			browserViewService,
++			(baseUrl, apiKey) => this.aiConfigService.saveCodexSettings({ baseUrl, apiKey }),
++		)) : undefined;
++		this.terminalController = this._register(new BoldTerminalController(mainWindow.document, mainProcessService, workspaceContextService, environmentService));
++		this._register(this.editorService.onDidEditorsChange(() => void this.emitState()));
++		this._register(this.editorService.onDidActiveEditorChange(() => void this.emitState()));
++		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => void this.emitState()));
++		this._register(this.workspaceContextService.onDidChangeWorkspaceName(() => void this.emitState()));
++	}
++
++	async getState(): Promise<IBoldFrontendState> {
++		await this.modeController.initialize();
++		const aiState = await this.aiConfigService.getState();
++		const mode = this.modeController.mode;
++		await this.prepareEditSurface(mode);
++		const workspace = this.workspaceContextService.getWorkspace();
++		const workspaceRoots = workspace.folders.map(folder => ({
++			name: folder.name,
++			uri: folder.uri.toString(),
++			directory: true,
++		}));
++
++		return {
++			mode,
++			workspaceName: workspace.folders.length === 1
++				? workspace.folders[0].name
++				: workspace.folders.length > 1 ? '多根工作区' : '未打开文件夹',
++			workspaceRoots,
++			tabs: this.collectTabs(),
++			claudeEnabled: aiState.claudeEnabled,
++			codexEnabled: aiState.codexEnabled,
++			gatewayConnected: aiState.claudeHasApiKey || aiState.codexHasApiKey,
++			editChatProvider: aiState.editChatProvider,
++		};
++	}
++
++	async listDirectory(uri: string): Promise<readonly IBoldFrontendFileEntry[]> {
++		const resource = this.validateWorkspaceResource(uri);
++		const stat = await this.fileService.resolve(resource, { resolveSingleChildDescendants: false });
++		return (stat.children ?? [])
++			.filter(child => child.name !== '.git')
++			.map(child => ({ name: child.name, uri: child.resource.toString(), directory: child.isDirectory }))
++			.sort((left, right) => left.directory === right.directory
++				? left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })
++				: left.directory ? -1 : 1);
++	}
++
++	async openFile(uri: string): Promise<IBoldFrontendDocument> {
++		const resource = this.validateWorkspaceResource(uri);
++		const contents = await this.fileService.readFile(resource);
++		return {
++			uri: resource.toString(),
++			name: basename(resource),
++			languageId: LANGUAGE_BY_EXTENSION[extname(resource).toLowerCase()] ?? 'plaintext',
++			contents: contents.value.toString(),
++		};
++	}
++
++	async saveFile(uri: string, contents: string): Promise<void> {
++		const resource = this.validateWorkspaceResource(uri);
++		await this.fileService.writeFile(resource, VSBuffer.fromString(contents), { atomic: { postfix: '.bold-tmp' } });
++	}
++
++	async activateTab(id: string): Promise<void> {
++		const reference = this.editorReferences.get(id);
++		if (!reference?.editor) {
++			return;
++		}
++		const group = this.editorGroupsService.getGroup(reference.groupId);
++		if (group) {
++			await group.openEditor(reference.editor);
++		}
++	}
++
++	async closeTab(id: string): Promise<void> {
++		const reference = this.editorReferences.get(id);
++		if (reference?.editor) {
++			await this.editorService.closeEditor({ editor: reference.editor, groupId: reference.groupId });
++		}
++	}
++
++	async runAction(action: BoldFrontendAction): Promise<void> {
++		if (action === 'terminal') {
++			await this.terminalController.toggle();
++			return;
++		}
++		await this.commandService.executeCommand(FRONTEND_ACTION_COMMANDS[action]);
++	}
++
++	async setMode(mode: BoldFrontendMode): Promise<void> {
++		await this.modeController.setMode(mode);
++	}
++
++	async setEditChatProvider(provider: BoldFrontendProvider): Promise<void> {
++		await this.modeController.setEditChatProvider(provider);
++		await this.emitState();
++	}
++
++	async getAiSettings(): Promise<IBoldFrontendAiSettings> {
++		const state = await this.aiConfigService.getState();
++		return {
++			claudeBaseUrl: state.claudeBaseUrl,
++			claudeHasApiKey: state.claudeHasApiKey,
++			codexBaseUrl: state.codexBaseUrl,
++			codexHasApiKey: state.codexHasApiKey,
++			editChatProvider: state.editChatProvider,
++		};
++	}
++
++	async saveAiSettings(provider: 'claude' | 'codex', baseUrl: string, apiKey: string): Promise<void> {
++		if (!apiKey) {
++			return;
++		}
++		if (provider === 'claude') {
++			await this.aiConfigService.saveClaudeSettings({ baseUrl, apiKey });
++		} else {
++			await this.aiConfigService.saveCodexSettings({ baseUrl, apiKey });
++		}
++	}
++
++	async openGateway(): Promise<void> {
++		await this.gatewayController?.toggle();
++	}
++
++	async openSettings(): Promise<void> { }
++
++	subscribe(listener: (state: IBoldFrontendState) => void): () => void {
++		this.listeners.add(listener);
++		return () => this.listeners.delete(listener);
++	}
++
++	private collectTabs(): readonly IBoldFrontendTab[] {
++		this.editorReferences.clear();
++		const tabs: IBoldFrontendTab[] = [];
++		for (const group of this.editorGroupsService.groups) {
++			group.editors.forEach((editor, index) => {
++				const id = `${group.id}:${index}:${editor.resource?.toString() ?? editor.typeId}`;
++				this.editorReferences.set(id, { editor, groupId: group.id });
++				tabs.push({
++					id,
++					label: editor.getName(),
++					active: group.isActive(editor),
++					dirty: editor.isDirty(),
++				});
++			});
++		}
++		return tabs;
++	}
++
++	private async prepareEditSurface(mode: BoldFrontendMode): Promise<void> {
++		if (mode !== 'edit' || this.editSurfacePrepared) {
++			return;
++		}
++		this.editSurfacePrepared = true;
++
++		const nativeWelcomeEditors: IEditorReference[] = [];
++		for (const group of this.editorGroupsService.groups) {
++			for (const editor of group.editors) {
++				if (editor.typeId === NATIVE_WELCOME_EDITOR_TYPE_ID) {
++					nativeWelcomeEditors.push({ editor, groupId: group.id });
++				}
++			}
++		}
++		await Promise.all(nativeWelcomeEditors.map(reference => this.editorService.closeEditor(reference)));
++	}
++
++	private validateWorkspaceResource(value: string): URI {
++		const resource = URI.parse(value);
++		const isWorkspaceRoot = this.workspaceContextService.getWorkspace().folders.some(folder => folder.uri.toString() === resource.toString());
++		if (!isWorkspaceRoot && !this.workspaceContextService.isInsideWorkspace(resource)) {
++			throw new Error('The requested resource is outside the current workspace.');
++		}
++		return resource;
++	}
++
++	private async emitState(): Promise<void> {
++		const request = ++this.stateRequest;
++		const state = await this.getState();
++		if (request !== this.stateRequest) {
++			return;
++		}
++		for (const listener of this.listeners) {
++			listener(state);
++		}
++	}
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+new file mode 100644
+index 0000000..7a45f62
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+@@ -0,0 +1,467 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { getZoomFactor } from '../../../../base/browser/browser.js';
++import { mainWindow } from '../../../../base/browser/window.js';
++import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
++import { BrowserViewStorageScope, IBrowserViewService } from '../../../../platform/browserView/common/browserView.js';
++
++type GatewayStatus = 'authenticated' | 'noKey' | 'signedOut' | 'twoFactor' | 'error';
++
++interface IGatewayScriptResult {
++	readonly status: GatewayStatus;
++	readonly apiKey?: string;
++	readonly message?: string;
++	readonly tempToken?: string;
++	readonly userEmailMasked?: string;
++}
++
++const GATEWAY_VIEW_ID = 'bold-ai-gateway';
++const KEY_POLL_INTERVAL = 2000;
++
++const SESSION_SCRIPT = `(async () => {
++	const storage = window.localStorage;
++	const clearAuth = () => ['auth_token', 'refresh_token', 'auth_user', 'token_expires_at'].forEach(key => storage.removeItem(key));
++	const unwrap = payload => payload && typeof payload.code === 'number' ? (payload.code === 0 ? payload.data : undefined) : payload;
++	const readJson = async response => { try { return await response.json(); } catch { return undefined; } };
++	const requestKeys = token => fetch('/api/v1/keys?page=1&page_size=100&status=active&sort_by=created_at&sort_order=desc', { credentials: 'include', headers: { Authorization: 'Bearer ' + token } });
++	try {
++		let token = storage.getItem('auth_token');
++		if (!token) { return { status: 'signedOut' }; }
++		let response = await requestKeys(token);
++		if (response.status === 401) {
++			const refreshToken = storage.getItem('refresh_token');
++			if (!refreshToken) { clearAuth(); return { status: 'signedOut' }; }
++			const refreshResponse = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) });
++			const refreshed = unwrap(await readJson(refreshResponse));
++			if (!refreshResponse.ok || typeof refreshed?.access_token !== 'string') { clearAuth(); return { status: 'signedOut' }; }
++			token = refreshed.access_token;
++			storage.setItem('auth_token', token);
++			if (typeof refreshed.refresh_token === 'string') { storage.setItem('refresh_token', refreshed.refresh_token); }
++			response = await requestKeys(token);
++		}
++		const payload = await readJson(response);
++		if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) { return { status: response.status === 401 ? 'signedOut' : 'error', message: payload?.message || '读取 API Key 失败' }; }
++		const data = unwrap(payload);
++		const items = Array.isArray(data?.items) ? data.items : [];
++		const item = items.find(candidate => candidate?.status === 'active' && typeof candidate?.key === 'string' && candidate.key.trim().length >= 8);
++		return item ? { status: 'authenticated', apiKey: item.key.trim() } : { status: 'noKey' };
++	} catch (error) { return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' }; }
++})()`;
++
++function loginScript(email: string, password: string): string {
++	const credentials = JSON.stringify({ email, password });
++	return `(async () => {
++		try {
++			const response = await fetch('/api/v1/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(${credentials}) });
++			let payload; try { payload = await response.json(); } catch { payload = undefined; }
++			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) { return { status: 'error', message: payload?.message || '登录失败' }; }
++			const data = payload && typeof payload.code === 'number' ? payload.data : payload;
++			if (data?.requires_2fa === true && typeof data.temp_token === 'string') { return { status: 'twoFactor', tempToken: data.temp_token, userEmailMasked: data.user_email_masked }; }
++			if (typeof data?.access_token !== 'string') { return { status: 'error', message: '登录响应中没有访问令牌' }; }
++			localStorage.setItem('auth_token', data.access_token);
++			if (typeof data.refresh_token === 'string') { localStorage.setItem('refresh_token', data.refresh_token); }
++			if (data.user) { localStorage.setItem('auth_user', JSON.stringify(data.user)); }
++			return { status: 'authenticated' };
++		} catch (error) { return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' }; }
++	})()`;
++}
++
++function twoFactorScript(tempToken: string, code: string): string {
++	const request = JSON.stringify({ temp_token: tempToken, totp_code: code });
++	return `(async () => {
++		try {
++			const response = await fetch('/api/v1/auth/login/2fa', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(${request}) });
++			let payload; try { payload = await response.json(); } catch { payload = undefined; }
++			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) { return { status: 'error', message: payload?.message || '验证码错误' }; }
++			const data = payload && typeof payload.code === 'number' ? payload.data : payload;
++			if (typeof data?.access_token !== 'string') { return { status: 'error', message: '登录响应中没有访问令牌' }; }
++			localStorage.setItem('auth_token', data.access_token);
++			if (typeof data.refresh_token === 'string') { localStorage.setItem('refresh_token', data.refresh_token); }
++			return { status: 'authenticated' };
++		} catch (error) { return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' }; }
++	})()`;
++}
++
++function parseResult(value: unknown): IGatewayScriptResult | undefined {
++	if (!value || typeof value !== 'object') {
++		return undefined;
++	}
++	const result = value as Record<string, unknown>;
++	if (!['authenticated', 'noKey', 'signedOut', 'twoFactor', 'error'].includes(String(result.status))) {
++		return undefined;
++	}
++	return {
++		status: result.status as GatewayStatus,
++		apiKey: typeof result.apiKey === 'string' ? result.apiKey : undefined,
++		message: typeof result.message === 'string' ? result.message : undefined,
++		tempToken: typeof result.tempToken === 'string' ? result.tempToken : undefined,
++		userEmailMasked: typeof result.userEmailMasked === 'string' ? result.userEmailMasked : undefined,
++	};
++}
++
++/** Custom Gateway UI backed directly by the main-process BrowserView channel. */
++export class BoldGatewayController extends Disposable {
++
++	private readonly container: HTMLElement;
++	private readonly content: HTMLElement;
++	private readonly browserHost: HTMLElement;
++	private readonly viewDisposables = this._register(new DisposableStore());
++	private browserCreated = false;
++	private browserVisible = false;
++	private waitingForKey = false;
++	private requestInProgress = false;
++	private importedKey: string | undefined;
++	private readonly initialCleanup: Promise<void>;
++
++	constructor(
++		private readonly document: Document,
++		private readonly windowId: number,
++		private readonly gatewayUrl: string,
++		private readonly browserViewService: IBrowserViewService,
++		private readonly saveApiKey: (baseUrl: string, apiKey: string) => Promise<void>,
++	) {
++		super();
++		this.container = document.createElement('div');
++		this.container.className = 'bold-gateway';
++		this.container.setAttribute('aria-hidden', 'true');
++		this.container.inert = true;
++		const panel = document.createElement('section');
++		panel.className = 'bold-gateway__panel';
++		const header = document.createElement('header');
++		header.className = 'bold-gateway__header';
++		const title = document.createElement('strong');
++		title.textContent = 'AI Gateway';
++		const close = document.createElement('button');
++		close.type = 'button';
++		close.textContent = '×';
++		close.setAttribute('aria-label', '关闭 Gateway');
++		close.addEventListener('click', () => void this.close());
++		header.append(title, close);
++		this.content = document.createElement('div');
++		this.content.className = 'bold-gateway__content';
++		this.browserHost = document.createElement('div');
++		this.browserHost.className = 'bold-gateway__browser-host';
++		this.browserHost.hidden = true;
++		panel.append(header, this.content, this.browserHost);
++		this.container.append(panel);
++		document.body.append(this.container);
++		this._register(toDisposable(() => this.container.remove()));
++
++		const resizeObserver = new mainWindow.ResizeObserver(() => void this.layoutBrowser());
++		resizeObserver.observe(this.browserHost);
++		this._register(toDisposable(() => resizeObserver.disconnect()));
++		// BrowserViews survive renderer reloads. Remove a stale hidden Gateway page so
++		// it cannot cover the custom shell or make an intranet request before the user
++		// explicitly opens Gateway.
++		this.initialCleanup = this.destroyStaleBrowser();
++	}
++
++	async toggle(): Promise<void> {
++		if (this.container.classList.contains('is-open')) {
++			await this.close();
++			return;
++		}
++		this.container.classList.add('is-open');
++		this.container.setAttribute('aria-hidden', 'false');
++		this.container.inert = false;
++		this.renderMessage('正在连接 Sub2API…', '登录后会静默读取可用 API Key，并自动保存到 AI Setting。', true);
++		try {
++			await this.ensureBrowser();
++			await this.refreshSession();
++		} catch {
++			this.renderLogin('无法连接 AI Gateway，请检查网络或稍后重试。');
++		}
++	}
++
++	private async close(): Promise<void> {
++		this.container.classList.remove('is-open');
++		this.container.setAttribute('aria-hidden', 'true');
++		this.container.inert = true;
++		this.waitingForKey = false;
++		await this.setBrowserVisible(false);
++	}
++
++	private async ensureBrowser(): Promise<void> {
++		await this.initialCleanup;
++		if (this.browserCreated) {
++			const currentUrl = await this.browserViewService.getURL(GATEWAY_VIEW_ID);
++			if (!this.sameOrigin(currentUrl, this.gatewayUrl)) {
++				await this.browserViewService.loadURL(GATEWAY_VIEW_ID, this.gatewayUrl);
++			}
++			return;
++		}
++
++		await this.browserViewService.updateWindowConfiguration(this.windowId, {
++			theme: { focusBorder: '#5897ff', buttonBackground: '#397ae8', buttonForeground: '#ffffff', font: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' },
++			keybindings: {},
++			trustedFileRoots: [],
++		});
++		await this.browserViewService.getOrCreateBrowserView(GATEWAY_VIEW_ID, {
++			owner: { mainWindowId: this.windowId },
++			sessionOptions: { scope: BrowserViewStorageScope.Global },
++			initialState: { url: this.gatewayUrl, title: 'AI Gateway' },
++		});
++		this.browserCreated = true;
++		this.viewDisposables.add(this.browserViewService.onDynamicDidChangeLoadingState(GATEWAY_VIEW_ID)(event => {
++			if (!event.loading && this.container.classList.contains('is-open')) {
++				void this.refreshSession();
++			}
++		}));
++		this.viewDisposables.add(this.browserViewService.onDynamicDidNavigate(GATEWAY_VIEW_ID)(() => {
++			if (this.waitingForKey) {
++				void this.refreshSession();
++			}
++		}));
++		const poller = mainWindow.setInterval(() => {
++			if (this.waitingForKey) {
++				void this.refreshSession();
++			}
++		}, KEY_POLL_INTERVAL);
++		this.viewDisposables.add(toDisposable(() => mainWindow.clearInterval(poller)));
++	}
++
++	private async destroyStaleBrowser(): Promise<void> {
++		try {
++			const stale = (await this.browserViewService.getBrowserViews(this.windowId)).some(view => view.id === GATEWAY_VIEW_ID);
++			if (stale) {
++				await this.browserViewService.destroyBrowserView(GATEWAY_VIEW_ID);
++			}
++		} catch {
++			// The view may already have been removed with its previous renderer.
++		}
++	}
++
++	private async refreshSession(): Promise<void> {
++		if (this.requestInProgress || !this.container.classList.contains('is-open')) {
++			return;
++		}
++		const url = await this.browserViewService.getURL(GATEWAY_VIEW_ID);
++		if (!this.sameOrigin(url, this.gatewayUrl)) {
++			return;
++		}
++		this.requestInProgress = true;
++		try {
++			const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, SESSION_SCRIPT));
++			if (!result || !this.container.classList.contains('is-open')) {
++				return;
++			}
++			switch (result.status) {
++				case 'authenticated':
++					if (result.apiKey) {
++						await this.importKey(result.apiKey);
++					}
++					break;
++				case 'noKey': this.renderNoKey(); break;
++				case 'signedOut': this.renderLogin(); break;
++				case 'error': this.renderLogin(result.message); break;
++			}
++		} finally {
++			this.requestInProgress = false;
++		}
++	}
++
++	private renderLogin(message?: string): void {
++		void this.setBrowserVisible(false);
++		this.waitingForKey = false;
++		const card = this.createCard('登录 AI Gateway', '登录 Sub2API 后会自动读取 API Key。', message);
++		const form = this.document.createElement('form');
++		const email = this.createInput('email', '邮箱');
++		email.autocomplete = 'username';
++		const password = this.createInput('password', '密码');
++		password.autocomplete = 'current-password';
++		const actions = this.createActions();
++		const submit = this.createButton('登录并导入');
++		submit.type = 'submit';
++		const web = this.createButton('使用网页登录', true);
++		actions.append(submit, web);
++		form.append(email, password, actions);
++		form.addEventListener('submit', event => {
++			event.preventDefault();
++			void this.login(email.value.trim(), password.value);
++		});
++		web.addEventListener('click', () => void this.showPage('/login?redirect=/keys', true));
++		card.append(form);
++		this.content.replaceChildren(card);
++		mainWindow.setTimeout(() => email.focus(), 0);
++	}
++
++	private async login(email: string, password: string): Promise<void> {
++		if (!email || !password) {
++			this.renderLogin('请输入邮箱和密码。');
++			return;
++		}
++		this.renderMessage('正在登录…', '正在安全连接 Sub2API。', true);
++		const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, loginScript(email, password)));
++		if (result?.status === 'twoFactor' && result.tempToken) {
++			this.renderTwoFactor(result.tempToken, result.userEmailMasked);
++			return;
++		}
++		if (result?.status === 'authenticated') {
++			await this.refreshSession();
++			return;
++		}
++		this.renderLogin(result?.message ?? '登录失败，请检查账号和密码。');
++	}
++
++	private renderTwoFactor(tempToken: string, email?: string, message?: string): void {
++		const card = this.createCard('双重验证', email ? `请输入 ${email} 的六位验证码。` : '请输入六位双重验证代码。', message);
++		const form = this.document.createElement('form');
++		const code = this.createInput('text', '六位验证码');
++		code.inputMode = 'numeric';
++		code.maxLength = 6;
++		const submit = this.createButton('验证并导入');
++		submit.type = 'submit';
++		form.append(code, submit);
++		form.addEventListener('submit', event => {
++			event.preventDefault();
++			void (async () => {
++				const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, twoFactorScript(tempToken, code.value.trim())));
++				if (result?.status === 'authenticated') {
++					await this.refreshSession();
++				} else {
++					this.renderTwoFactor(tempToken, email, result?.message ?? '验证码错误。');
++				}
++			})();
++		});
++		card.append(form);
++		this.content.replaceChildren(card);
++		mainWindow.setTimeout(() => code.focus(), 0);
++	}
++
++	private renderNoKey(): void {
++		void this.setBrowserVisible(false);
++		this.waitingForKey = false;
++		const card = this.createCard('尚未创建 API Key', '账户中没有可用 Key。创建完成后会自动检测并导入。');
++		const actions = this.createActions();
++		const create = this.createButton('创建 Key');
++		const retry = this.createButton('重新检测', true);
++		actions.append(create, retry);
++		create.addEventListener('click', () => void this.showPage('/keys', true));
++		retry.addEventListener('click', () => void this.refreshSession());
++		card.append(actions);
++		this.content.replaceChildren(card);
++	}
++
++	private async importKey(apiKey: string): Promise<void> {
++		if (apiKey !== this.importedKey) {
++			await this.saveApiKey(new URL('/v1', this.gatewayUrl).toString().replace(/\/$/, ''), apiKey);
++			this.importedKey = apiKey;
++		}
++		await this.setBrowserVisible(false);
++		this.waitingForKey = false;
++		const suffix = apiKey.length > 8 ? `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}` : '••••••••';
++		const card = this.createCard('AI Gateway 已连接', 'API 地址和 Key 已自动保存到 AI Setting。');
++		const key = this.document.createElement('div');
++		key.className = 'bold-gateway__key';
++		key.textContent = suffix;
++		card.append(key);
++		this.content.replaceChildren(card);
++	}
++
++	private async showPage(path: string, waitForKey: boolean): Promise<void> {
++		this.content.replaceChildren();
++		this.browserHost.hidden = false;
++		this.waitingForKey = waitForKey;
++		await this.browserViewService.loadURL(GATEWAY_VIEW_ID, new URL(path, this.gatewayUrl).toString());
++		await this.setBrowserVisible(true);
++		await this.browserViewService.focus(GATEWAY_VIEW_ID);
++	}
++
++	private async setBrowserVisible(visible: boolean): Promise<void> {
++		this.browserVisible = visible;
++		this.browserHost.hidden = !visible;
++		if (!this.browserCreated) {
++			return;
++		}
++		if (visible) {
++			await this.layoutBrowser();
++		}
++		await this.browserViewService.setVisible(GATEWAY_VIEW_ID, visible);
++	}
++
++	private async layoutBrowser(): Promise<void> {
++		if (!this.browserVisible || !this.browserCreated) {
++			return;
++		}
++		const rect = this.browserHost.getBoundingClientRect();
++		if (rect.width < 1 || rect.height < 1) {
++			return;
++		}
++		await this.browserViewService.layout(GATEWAY_VIEW_ID, {
++			windowId: this.windowId,
++			x: rect.left,
++			y: rect.top,
++			width: rect.width,
++			height: rect.height,
++			zoomFactor: getZoomFactor(mainWindow),
++			cornerRadius: 12,
++		});
++	}
++
++	private renderMessage(title: string, description: string, loading = false): void {
++		void this.setBrowserVisible(false);
++		const card = this.createCard(title, description);
++		if (loading) {
++			const spinner = this.document.createElement('div');
++			spinner.className = 'bold-gateway__spinner';
++			card.append(spinner);
++		}
++		this.content.replaceChildren(card);
++	}
++
++	private createCard(title: string, description: string, message?: string): HTMLElement {
++		const card = this.document.createElement('div');
++		card.className = 'bold-gateway__card';
++		const mark = this.document.createElement('span');
++		mark.className = 'bold-gateway__mark';
++		mark.textContent = 'AI';
++		const eyebrow = this.document.createElement('span');
++		eyebrow.className = 'bold-gateway__eyebrow';
++		eyebrow.textContent = 'SUB2API GATEWAY';
++		const heading = this.document.createElement('h2');
++		heading.textContent = title;
++		const copy = this.document.createElement('p');
++		copy.textContent = description;
++		card.append(mark, eyebrow, heading, copy);
++		if (message) {
++			const error = this.document.createElement('div');
++			error.className = 'bold-gateway__error';
++			error.textContent = message;
++			card.append(error);
++		}
++		return card;
++	}
++
++	private createInput(type: string, placeholder: string): HTMLInputElement {
++		const input = this.document.createElement('input');
++		input.type = type;
++		input.placeholder = placeholder;
++		input.required = true;
++		return input;
++	}
++
++	private createButton(label: string, secondary = false): HTMLButtonElement {
++		const button = this.document.createElement('button');
++		button.type = 'button';
++		button.textContent = label;
++		button.className = secondary ? 'is-secondary' : '';
++		return button;
++	}
++
++	private createActions(): HTMLElement {
++		const actions = this.document.createElement('div');
++		actions.className = 'bold-gateway__actions';
++		return actions;
++	}
++
++	private sameOrigin(left: string, right: string): boolean {
++		try {
++			return new URL(left).origin === new URL(right).origin;
++		} catch {
++			return false;
++		}
++	}
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts
+new file mode 100644
+index 0000000..e37d22a
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts
+@@ -0,0 +1,195 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import type { Terminal as XtermTerminal } from '@xterm/xterm';
++import { importAMDNodeModule } from '../../../../amdX.js';
++import { mainWindow } from '../../../../base/browser/window.js';
++import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
++import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
++import { INativeEnvironmentService } from '../../../../platform/environment/common/environment.js';
++import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
++import { ILocalPtyService, IProcessDataEvent, IShellLaunchConfig, ITerminalProcessOptions, TerminalIpcChannels } from '../../../../platform/terminal/common/terminal.js';
++import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
++
++/** A custom xterm surface connected directly to VS Code's existing local PTY host. */
++export class BoldTerminalController extends Disposable {
++
++	private readonly container: HTMLElement;
++	private readonly terminalHost: HTMLElement;
++	private readonly processDisposables = this._register(new DisposableStore());
++	private readonly ptyService: ILocalPtyService;
++	private terminal: XtermTerminal | undefined;
++	private processId: number | undefined;
++	private starting: Promise<void> | undefined;
++
++	constructor(
++		document: Document,
++		mainProcessService: IMainProcessService,
++		private readonly workspaceContextService: IWorkspaceContextService,
++		private readonly environmentService: INativeEnvironmentService,
++	) {
++		super();
++		this.ptyService = ProxyChannel.toService<ILocalPtyService>(mainProcessService.getChannel(TerminalIpcChannels.LocalPty));
++		this.container = document.createElement('section');
++		this.container.className = 'bold-terminal';
++		this.container.setAttribute('aria-hidden', 'true');
++		this.container.inert = true;
++		const header = document.createElement('header');
++		const title = document.createElement('strong');
++		title.textContent = 'TERMINAL';
++		const actions = document.createElement('div');
++		const restart = document.createElement('button');
++		restart.type = 'button';
++		restart.textContent = '重新启动';
++		restart.addEventListener('click', () => void this.restart());
++		const close = document.createElement('button');
++		close.type = 'button';
++		close.textContent = '×';
++		close.setAttribute('aria-label', '关闭终端');
++		close.addEventListener('click', () => this.hide());
++		actions.append(restart, close);
++		header.append(title, actions);
++		this.terminalHost = document.createElement('div');
++		this.terminalHost.className = 'bold-terminal__xterm';
++		this.container.append(header, this.terminalHost);
++		document.body.append(this.container);
++		this._register(toDisposable(() => this.container.remove()));
++
++		const resizeObserver = new mainWindow.ResizeObserver(() => this.layout());
++		resizeObserver.observe(this.terminalHost);
++		this._register(toDisposable(() => resizeObserver.disconnect()));
++	}
++
++	async toggle(): Promise<void> {
++		if (this.container.classList.contains('is-open')) {
++			this.hide();
++			return;
++		}
++		this.container.classList.add('is-open');
++		this.container.setAttribute('aria-hidden', 'false');
++		this.container.inert = false;
++		await this.ensureStarted();
++		this.layout();
++		this.terminal?.focus();
++	}
++
++	private hide(): void {
++		this.container.classList.remove('is-open');
++		this.container.setAttribute('aria-hidden', 'true');
++		this.container.inert = true;
++	}
++
++	private ensureStarted(): Promise<void> {
++		if (!this.starting) {
++			this.starting = this.start();
++		}
++		return this.starting;
++	}
++
++	private async start(): Promise<void> {
++		const { Terminal } = await importAMDNodeModule<typeof import('@xterm/xterm')>('@xterm/xterm', 'lib/xterm.js');
++		const terminal = this.terminal = new Terminal({
++			allowProposedApi: false,
++			convertEol: false,
++			cursorBlink: true,
++			fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
++			fontSize: 12,
++			lineHeight: 1.25,
++			scrollback: 5000,
++			theme: {
++				background: '#0f131a',
++				foreground: '#d2d8e2',
++				cursor: '#73a5ff',
++				selectionBackground: '#315b965c',
++			},
++		});
++		terminal.open(this.terminalHost);
++		this.layout();
++
++		const workspace = this.workspaceContextService.getWorkspace();
++		const folder = workspace.folders[0];
++		const cwd = folder?.uri.scheme === 'file' ? folder.uri.fsPath : this.environmentService.userHome.fsPath;
++		const [shell, env] = await Promise.all([this.ptyService.getDefaultSystemShell(), this.ptyService.getEnvironment()]);
++		const shellLaunchConfig: IShellLaunchConfig = { executable: shell, args: [], cwd };
++		const options: ITerminalProcessOptions = {
++			shellIntegration: { enabled: false, suggestEnabled: false, nonce: '' },
++			windowsUseConptyDll: false,
++			environmentVariableCollections: undefined,
++			workspaceFolder: folder,
++			isScreenReaderOptimized: false,
++		};
++		const id = await this.ptyService.createProcess(
++			shellLaunchConfig,
++			cwd,
++			terminal.cols,
++			terminal.rows,
++			'11',
++			env,
++			env,
++			options,
++			false,
++			workspace.id,
++			workspace.folders.length === 1 ? workspace.folders[0].name : 'Bold Code',
++		);
++		this.processId = id;
++		this.processDisposables.add(this.ptyService.onProcessData(event => {
++			if (event.id !== id) {
++				return;
++			}
++			const data = typeof event.event === 'string' ? event.event : (event.event as IProcessDataEvent).data;
++			terminal.write(data, () => void this.ptyService.acknowledgeDataEvent(id, data.length));
++		}));
++		this.processDisposables.add(this.ptyService.onProcessExit(event => {
++			if (event.id === id) {
++				terminal.write(`\r\n\x1b[90m[进程已退出${typeof event.event === 'number' ? ` · ${event.event}` : ''}]\x1b[0m\r\n`);
++			}
++		}));
++		this.processDisposables.add(terminal.onData(data => void this.ptyService.input(id, data)));
++		this.processDisposables.add(terminal.onResize(size => void this.ptyService.resize(id, size.cols, size.rows)));
++		const launchError = await this.ptyService.start(id);
++		if (launchError && 'message' in launchError) {
++			terminal.write(`\r\n\x1b[31m${launchError.message}\x1b[0m\r\n`);
++		}
++	}
++
++	private layout(): void {
++		const terminal = this.terminal;
++		if (!terminal || !this.container.classList.contains('is-open')) {
++			return;
++		}
++		const rect = this.terminalHost.getBoundingClientRect();
++		if (rect.width < 40 || rect.height < 40) {
++			return;
++		}
++		const cols = Math.max(20, Math.floor((rect.width - 18) / 7.25));
++		const rows = Math.max(3, Math.floor((rect.height - 12) / 15.5));
++		if (terminal.cols !== cols || terminal.rows !== rows) {
++			terminal.resize(cols, rows);
++		}
++	}
++
++	private async restart(): Promise<void> {
++		const processId = this.processId;
++		this.processId = undefined;
++		this.starting = undefined;
++		this.processDisposables.clear();
++		this.terminal?.dispose();
++		this.terminal = undefined;
++		this.terminalHost.replaceChildren();
++		if (typeof processId === 'number') {
++			await this.ptyService.shutdown(processId, true);
++		}
++		await this.ensureStarted();
++	}
++
++	override dispose(): void {
++		const processId = this.processId;
++		if (typeof processId === 'number') {
++			void this.ptyService.shutdown(processId, true);
++		}
++		this.terminal?.dispose();
++		super.dispose();
++	}
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+new file mode 100644
+index 0000000..cdf8edd
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -0,0 +1,1510 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++html.bold-frontend-bootstrapping,
++html.bold-frontend-bootstrapping body {
++	background: #0b0e14;
++}
++
++html.bold-frontend-bootstrapping .monaco-workbench {
++	visibility: hidden !important;
++	opacity: 0 !important;
++	pointer-events: none !important;
++}
++
++.bold-frontend-bootstrap {
++	position: fixed;
++	z-index: 10000;
++	inset: 0;
++	display: grid;
++	grid-template:
++		'trail explorer topbar' 52px
++		'trail explorer content' 1fr /
++		68px 264px 1fr;
++	overflow: hidden;
++	background: #0b0e14;
++	color: #d7dce6;
++	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
++}
++
++.bold-frontend-bootstrap__rail {
++	grid-area: trail;
++	display: flex;
++	box-sizing: border-box;
++	flex-direction: column;
++	align-items: center;
++	gap: 18px;
++	padding: 47px 8px 12px;
++	border-right: 1px solid #20252f;
++	background: #0e1219;
++}
++
++.bold-frontend-bootstrap__brand,
++.bold-frontend-bootstrap__mark {
++	display: grid;
++	place-items: center;
++	border: 1px solid #5897ff;
++	background: linear-gradient(145deg, #4f91ff, #2456b8);
++	box-shadow: 0 10px 28px rgb(43 105 222 / 28%);
++	color: #fff;
++	font-weight: 750;
++}
++
++.bold-frontend-bootstrap__brand {
++	width: 38px;
++	height: 38px;
++	border-radius: 12px;
++}
++
++.bold-frontend-bootstrap__rail-item {
++	display: grid;
++	width: 34px;
++	height: 34px;
++	place-items: center;
++	border-radius: 10px;
++	color: #77808e;
++	font-size: 13px;
++}
++
++.bold-frontend-bootstrap__explorer {
++	grid-area: explorer;
++	display: flex;
++	box-sizing: border-box;
++	flex-direction: column;
++	gap: 12px;
++	padding: 20px 18px;
++	border-right: 1px solid #20252f;
++	background: #11151c;
++}
++
++.bold-frontend-bootstrap__eyebrow {
++	color: #667080;
++	font-size: 10px;
++	font-weight: 700;
++	letter-spacing: 0.12em;
++}
++
++.bold-frontend-bootstrap__explorer strong {
++	margin-bottom: 12px;
++	font-size: 13px;
++}
++
++.bold-frontend-bootstrap__tree-row {
++	width: var(--row-width);
++	height: 8px;
++	border-radius: 999px;
++	background: #252b35;
++	opacity: 0.72;
++}
++
++.bold-frontend-bootstrap__topbar {
++	grid-area: topbar;
++	display: flex;
++	align-items: end;
++	padding: 0 16px;
++	border-bottom: 1px solid #20252f;
++	background: #0d1016;
++}
++
++.bold-frontend-bootstrap__tab {
++	min-width: 150px;
++	padding: 12px 16px 11px;
++	border: 1px solid #252b35;
++	border-bottom: 0;
++	border-radius: 10px 10px 0 0;
++	color: #8e98a8;
++	font-size: 12px;
++}
++
++.bold-frontend-bootstrap__content {
++	grid-area: content;
++	display: flex;
++	flex-direction: column;
++	align-items: center;
++	justify-content: center;
++	gap: 12px;
++	margin: 10px;
++	border: 1px solid #20252f;
++	border-radius: 12px;
++	background: #11151b;
++}
++
++.bold-frontend-bootstrap__mark {
++	width: 52px;
++	height: 52px;
++	border-radius: 16px;
++	font-size: 22px;
++}
++
++.bold-frontend-bootstrap__content strong {
++	font-size: 17px;
++}
++
++.bold-frontend-bootstrap__content > span:last-child {
++	color: #707b8b;
++	font-size: 12px;
++}
++
++body.bold-independent-frontend {
++	--bold-rail-width: 68px;
++	--bold-explorer-width: 264px;
++	--bold-topbar-height: 52px;
++	--bold-statusbar-height: 28px;
++	--bold-window-controls-height: 35px;
++	--bold-window-controls-width: 80px;
++	--bold-chat-width: clamp(340px, 31vw, 520px);
++	--bold-shell-left: calc(var(--bold-rail-width) + var(--bold-explorer-width));
++	--bold-topbar-left: max(var(--bold-shell-left), var(--bold-window-controls-width));
++	--vscode-foreground: #d7dce6;
++	--vscode-descriptionForeground: #7f8999;
++	--vscode-sideBar-background: #11151c;
++	--vscode-editor-background: #11151b;
++	--vscode-editorWidget-background: #151a23;
++	--vscode-input-background: #171c25;
++	--vscode-input-foreground: #d7dce6;
++	--vscode-input-border: #303744;
++	--vscode-focusBorder: #5897ff;
++	--vscode-errorForeground: #ff6b7a;
++	--vscode-testing-iconPassed: #51c995;
++	--vscode-button-background: #397ae8;
++	--vscode-button-foreground: #fff;
++	--vscode-button-hoverBackground: #4a88f0;
++	--vscode-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
++	--vscode-editor-font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
++	background: color-mix(in srgb, var(--vscode-sideBar-background) 92%, #080b12);
++}
++
++body.bold-independent-frontend .monaco-workbench {
++	top: 0 !important;
++	left: 0 !important;
++	width: 100vw !important;
++	height: 100vh !important;
++	overflow: visible !important;
++	border: 0 !important;
++	border-radius: 0 !important;
++	box-shadow: none !important;
++	opacity: 1;
++	visibility: hidden !important;
++	pointer-events: none !important;
++	transition: opacity 140ms ease;
++}
++
++body.bold-independent-frontend:not(.ai-hub-agent-mode):not(.ai-hub-edit-chat-mode) .monaco-workbench {
++	visibility: hidden !important;
++	opacity: 0 !important;
++	pointer-events: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench {
++	background: transparent !important;
++	visibility: visible !important;
++	opacity: 1 !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > *,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > * {
++	visibility: hidden !important;
++	pointer-events: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .monaco-grid-view,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .monaco-grid-view {
++	opacity: 0 !important;
++	visibility: visible !important;
++	pointer-events: none !important;
++}
++
++body.bold-independent-frontend .monaco-workbench .part.titlebar,
++body.bold-independent-frontend .monaco-workbench .part.activitybar,
++body.bold-independent-frontend .monaco-workbench .part.statusbar {
++	display: none !important;
++}
++
++body.bold-independent-frontend .monaco-workbench > .notifications-toasts,
++body.bold-independent-frontend .monaco-workbench > .notifications-center,
++body.bold-independent-frontend .monaco-workbench .part.banner,
++body.bold-independent-frontend .monaco-workbench .monaco-sash,
++body.bold-independent-frontend .monaco-workbench .quick-input-widget,
++body.bold-independent-frontend .monaco-workbench .context-view,
++body.bold-independent-frontend .monaco-workbench .monaco-dialog-box {
++	display: none !important;
++	pointer-events: none !important;
++}
++
++body.bold-independent-frontend .monaco-workbench .editor-group-watermark-wrapper {
++	display: none !important;
++}
++
++.bold-frontend {
++	position: fixed;
++	z-index: 800;
++	inset: 0;
++	color: var(--vscode-foreground);
++	font-family: var(--vscode-font-family);
++	pointer-events: none;
++	-webkit-font-smoothing: antialiased;
++}
++
++.bold-frontend[hidden] {
++	display: none;
++}
++
++body.ai-hub-agent-mode {
++	--bold-explorer-width: 0px;
++}
++
++.bold-frontend.is-agent-mode .bold-frontend__explorer {
++	display: none;
++}
++
++.bold-frontend.is-agent-mode .bold-frontend__content {
++	display: none;
++}
++
++.bold-frontend.is-agent-mode .bold-frontend__editor,
++.bold-frontend.is-agent-mode .bold-frontend__editor-empty {
++	display: none;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.editor,
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.panel {
++	display: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar,
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar {
++	border: 0 !important;
++	background: transparent !important;
++	opacity: 0 !important;
++	pointer-events: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty),
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty) {
++	position: fixed !important;
++	top: var(--bold-topbar-height) !important;
++	right: 10px !important;
++	bottom: calc(var(--bold-statusbar-height) + 8px) !important;
++	height: auto !important;
++	min-width: 0 !important;
++	min-height: 0 !important;
++	box-shadow: 0 16px 48px color-mix(in srgb, #000 22%, transparent);
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty) {
++	left: var(--bold-shell-left) !important;
++	width: auto !important;
++}
++
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty) {
++	left: auto !important;
++	width: var(--bold-chat-width) !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar.empty,
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar.empty,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar.empty,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar.empty {
++	display: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .content,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .content {
++	position: absolute !important;
++	top: 0 !important;
++	right: 0 !important;
++	bottom: 0 !important;
++	left: 0 !important;
++	width: 100% !important;
++	height: 100% !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .composite.title,
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .pane-composite-part .pane-header,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .composite.title,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .pane-composite-part .pane-header {
++	display: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal {
++	position: fixed !important;
++	z-index: 10 !important;
++	inset: 0 !important;
++	width: 100vw !important;
++	height: 100vh !important;
++	overflow: visible !important;
++	clip: auto !important;
++	visibility: visible !important;
++	pointer-events: none !important;
++}
++
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div,
++body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div > iframe.webview.ready,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div,
++body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div > iframe.webview.ready {
++	z-index: 11 !important;
++	pointer-events: auto !important;
++}
++
++.bold-frontend button {
++	color: inherit;
++	font: inherit;
++}
++
++.bold-frontend__rail,
++.bold-frontend__explorer,
++.bold-frontend__topbar,
++.bold-frontend__content,
++.bold-frontend__statusbar,
++.bold-frontend__settings {
++	pointer-events: auto;
++}
++
++.bold-frontend__settings {
++	position: absolute;
++	z-index: 20;
++	top: 10px;
++	right: 10px;
++	bottom: 10px;
++	width: min(480px, calc(100vw - 88px));
++	overflow: hidden;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
++	border-radius: 16px;
++	background: color-mix(in srgb, var(--vscode-editorWidget-background) 98%, #0d1118);
++	box-shadow: 0 28px 80px rgb(0 0 0 / 48%);
++	opacity: 0;
++	transform: translateX(calc(100% + 24px));
++	transition: transform 180ms ease, opacity 180ms ease;
++}
++
++.bold-frontend__settings.is-open {
++	opacity: 1;
++	transform: translateX(0);
++}
++
++.bold-frontend__settings-header {
++	display: flex;
++	height: 54px;
++	box-sizing: border-box;
++	align-items: center;
++	justify-content: space-between;
++	padding: 0 14px 0 18px;
++	border-bottom: 1px solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++}
++
++.bold-frontend__settings-close {
++	display: grid;
++	width: 30px;
++	height: 30px;
++	place-items: center;
++	border-radius: 8px;
++	background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
++}
++
++.bold-frontend__settings-close .bold-frontend__button-label {
++	display: none;
++}
++
++.bold-frontend__settings-body {
++	height: calc(100% - 54px);
++	box-sizing: border-box;
++	overflow: auto;
++	padding: 22px;
++}
++
++.bold-frontend__settings-loading,
++.bold-frontend__settings-error {
++	padding: 32px 8px;
++	color: var(--vscode-descriptionForeground);
++	font-size: 12px;
++}
++
++.bold-frontend__settings-error {
++	color: var(--vscode-errorForeground);
++}
++
++.bold-frontend__settings-intro {
++	margin-bottom: 22px;
++}
++
++.bold-frontend__settings-intro h2 {
++	margin: 8px 0 7px;
++	font-size: 22px;
++	letter-spacing: -.02em;
++}
++
++.bold-frontend__settings-intro p {
++	margin: 0;
++	color: var(--vscode-descriptionForeground);
++	font-size: 11px;
++	line-height: 1.65;
++}
++
++.bold-frontend__chat-preference {
++	display: grid;
++	gap: 14px;
++	margin-bottom: 18px;
++	padding: 16px;
++	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 24%, transparent);
++	border-radius: 13px;
++	background:
++		linear-gradient(145deg, color-mix(in srgb, var(--vscode-focusBorder) 9%, transparent), transparent 62%),
++		color-mix(in srgb, var(--vscode-editor-background) 88%, transparent);
++}
++
++.bold-frontend__chat-preference-copy {
++	display: grid;
++	gap: 5px;
++}
++
++.bold-frontend__chat-preference-copy strong {
++	font-size: 13px;
++}
++
++.bold-frontend__chat-preference-copy span {
++	color: var(--vscode-descriptionForeground);
++	font-size: 10px;
++	line-height: 1.5;
++}
++
++.bold-frontend__chat-provider-choices {
++	display: grid;
++	grid-template-columns: repeat(2, minmax(0, 1fr));
++	gap: 8px;
++}
++
++.bold-frontend__chat-provider-choice {
++	display: flex;
++	height: 42px;
++	align-items: center;
++	gap: 9px;
++	padding: 0 11px;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
++	border-radius: 9px;
++	background: color-mix(in srgb, var(--vscode-input-background) 88%, transparent);
++	color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
++	cursor: pointer;
++	font-size: 11px;
++	font-weight: 600;
++}
++
++.bold-frontend__chat-provider-choice:hover,
++.bold-frontend__chat-provider-choice:focus-visible {
++	outline: 0;
++	border-color: color-mix(in srgb, var(--vscode-focusBorder) 48%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__chat-provider-choice.is-selected {
++	border-color: color-mix(in srgb, var(--vscode-focusBorder) 68%, transparent);
++	background: color-mix(in srgb, var(--vscode-focusBorder) 13%, var(--vscode-input-background));
++	box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder) 9%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__chat-provider-choice:disabled {
++	cursor: wait;
++	opacity: .55;
++}
++
++.bold-frontend__chat-provider-mark {
++	display: grid;
++	width: 24px;
++	height: 24px;
++	place-items: center;
++	border-radius: 7px;
++	background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent);
++	color: color-mix(in srgb, var(--vscode-focusBorder) 78%, #fff);
++	font-size: 8px;
++	font-weight: 750;
++}
++
++.bold-frontend__chat-provider-status {
++	min-height: 14px;
++	color: var(--vscode-testing-iconPassed);
++	font-size: 10px;
++}
++
++.bold-frontend__provider-card {
++	overflow: hidden;
++	margin-top: 12px;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
++	border-radius: 13px;
++	background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
++}
++
++.bold-frontend__provider-header {
++	display: flex;
++	align-items: center;
++	gap: 10px;
++	padding: 14px 16px;
++	border-bottom: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++.bold-frontend__provider-mark {
++	display: grid;
++	width: 34px;
++	height: 34px;
++	place-items: center;
++	border-radius: 10px;
++	background: linear-gradient(135deg, var(--vscode-button-background), #6654d9);
++	color: var(--vscode-button-foreground);
++	font-size: 11px;
++	font-weight: 750;
++}
++
++.bold-frontend__provider-connected {
++	margin-left: auto;
++	color: var(--vscode-testing-iconPassed);
++	font-size: 10px;
++}
++
++.bold-frontend__provider-form {
++	display: grid;
++	padding: 16px;
++}
++
++.bold-frontend__provider-form label {
++	margin-bottom: 7px;
++	font-size: 10px;
++	font-weight: 600;
++}
++
++.bold-frontend__provider-form input {
++	height: 38px;
++	box-sizing: border-box;
++	margin-bottom: 14px;
++	padding: 0 11px;
++	border: 1px solid var(--vscode-input-border);
++	border-radius: 8px;
++	outline: 0;
++	background: var(--vscode-input-background);
++	color: var(--vscode-input-foreground);
++}
++
++.bold-frontend__provider-form input:focus {
++	border-color: var(--vscode-focusBorder);
++	box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder) 15%, transparent);
++}
++
++.bold-frontend__provider-actions {
++	display: flex;
++	align-items: center;
++	justify-content: space-between;
++}
++
++.bold-frontend__provider-status {
++	color: var(--vscode-testing-iconPassed);
++	font-size: 10px;
++}
++
++.bold-frontend__provider-save {
++	min-height: 34px;
++	padding: 0 13px;
++	border: 0;
++	border-radius: 8px;
++	background: var(--vscode-button-background);
++	color: var(--vscode-button-foreground);
++	cursor: pointer;
++}
++
++.bold-frontend__provider-save:hover {
++	background: var(--vscode-button-hoverBackground);
++}
++
++.bold-gateway {
++	position: fixed;
++	z-index: 2400;
++	inset: 0;
++	background: rgb(4 7 12 / 58%);
++	font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
++	opacity: 0;
++	pointer-events: none;
++	transition: opacity 180ms ease;
++}
++
++.bold-gateway.is-open {
++	opacity: 1;
++	pointer-events: auto;
++}
++
++.bold-gateway__panel {
++	position: absolute;
++	top: 10px;
++	right: 10px;
++	bottom: 10px;
++	width: min(760px, calc(100vw - 88px));
++	overflow: hidden;
++	border: 1px solid rgb(255 255 255 / 10%);
++	border-radius: 18px;
++	background: #11151c;
++	box-shadow: 0 28px 90px rgb(0 0 0 / 55%);
++	color: #d7dce6;
++	transform: translateX(calc(100% + 24px));
++	transition: transform 180ms ease;
++}
++
++.bold-gateway.is-open .bold-gateway__panel {
++	transform: translateX(0);
++}
++
++.bold-gateway__header {
++	display: flex;
++	height: 56px;
++	box-sizing: border-box;
++	align-items: center;
++	justify-content: space-between;
++	padding: 0 15px 0 20px;
++	border-bottom: 1px solid rgb(255 255 255 / 8%);
++	background: #121720;
++}
++
++.bold-gateway__header button {
++	display: grid;
++	width: 32px;
++	height: 32px;
++	place-items: center;
++	border: 0;
++	border-radius: 9px;
++	background: rgb(255 255 255 / 6%);
++	color: #cfd5df;
++	cursor: pointer;
++	font-size: 19px;
++}
++
++.bold-gateway__content,
++.bold-gateway__browser-host {
++	position: absolute;
++	top: 56px;
++	right: 0;
++	bottom: 0;
++	left: 0;
++}
++
++.bold-gateway__content {
++	display: grid;
++	overflow: auto;
++	place-items: center;
++	padding: 34px;
++}
++
++.bold-gateway__browser-host[hidden] {
++	display: none;
++}
++
++.bold-gateway__card {
++	width: min(100%, 440px);
++	box-sizing: border-box;
++	padding: 32px;
++	border: 1px solid rgb(255 255 255 / 10%);
++	border-radius: 18px;
++	background: #171c25;
++	box-shadow: 0 22px 60px rgb(0 0 0 / 34%);
++}
++
++.bold-gateway__mark {
++	display: grid;
++	width: 44px;
++	height: 44px;
++	place-items: center;
++	margin-bottom: 22px;
++	border-radius: 13px;
++	background: linear-gradient(135deg, #397ae8, #6654d9);
++	color: #fff;
++	font-size: 12px;
++	font-weight: 750;
++}
++
++.bold-gateway__eyebrow {
++	display: block;
++	margin-bottom: 8px;
++	color: #7f8999;
++	font-size: 9px;
++	font-weight: 700;
++	letter-spacing: .14em;
++}
++
++.bold-gateway__card h2 {
++	margin: 0 0 9px;
++	font-size: 22px;
++	letter-spacing: -.02em;
++}
++
++.bold-gateway__card p {
++	margin: 0 0 23px;
++	color: #8a94a4;
++	font-size: 12px;
++	line-height: 1.65;
++}
++
++.bold-gateway__card form {
++	display: grid;
++	gap: 12px;
++}
++
++.bold-gateway__card input {
++	height: 40px;
++	box-sizing: border-box;
++	padding: 0 12px;
++	border: 1px solid #303744;
++	border-radius: 9px;
++	outline: 0;
++	background: #11161e;
++	color: #d7dce6;
++}
++
++.bold-gateway__card input:focus {
++	border-color: #5897ff;
++	box-shadow: 0 0 0 3px rgb(88 151 255 / 15%);
++}
++
++.bold-gateway__actions {
++	display: flex;
++	flex-wrap: wrap;
++	gap: 8px;
++	margin-top: 10px;
++}
++
++.bold-gateway__card button {
++	min-height: 36px;
++	padding: 0 15px;
++	border: 0;
++	border-radius: 9px;
++	background: #397ae8;
++	color: #fff;
++	cursor: pointer;
++	font-weight: 600;
++}
++
++.bold-gateway__card button.is-secondary {
++	border: 1px solid rgb(255 255 255 / 8%);
++	background: #252b35;
++	color: #d7dce6;
++}
++
++.bold-gateway__error {
++	margin-bottom: 16px;
++	color: #ff6b7a;
++	font-size: 11px;
++}
++
++.bold-gateway__spinner {
++	width: 18px;
++	height: 18px;
++	box-sizing: border-box;
++	border: 2px solid rgb(255 255 255 / 16%);
++	border-top-color: #5897ff;
++	border-radius: 99px;
++	animation: bold-gateway-spin 800ms linear infinite;
++}
++
++.bold-gateway__key {
++	padding: 13px 14px;
++	border: 1px solid rgb(255 255 255 / 8%);
++	border-radius: 9px;
++	background: #11161e;
++	color: #9ca7b8;
++	font-family: var(--vscode-editor-font-family, monospace);
++	font-size: 12px;
++	letter-spacing: .04em;
++}
++
++@keyframes bold-gateway-spin {
++	to { transform: rotate(360deg); }
++}
++
++.bold-terminal {
++	position: fixed;
++	z-index: 1200;
++	right: 10px;
++	bottom: calc(var(--bold-statusbar-height, 28px) + 8px);
++	left: var(--bold-shell-left, 332px);
++	height: min(42vh, 390px);
++	overflow: hidden;
++	border: 1px solid rgb(255 255 255 / 10%);
++	border-radius: 12px;
++	background: #0f131a;
++	box-shadow: 0 -16px 55px rgb(0 0 0 / 42%);
++	opacity: 0;
++	pointer-events: none;
++	transform: translateY(calc(100% + 40px));
++	transition: transform 180ms ease, opacity 180ms ease;
++}
++
++body.ai-hub-edit-chat-mode .bold-terminal {
++	right: calc(var(--bold-chat-width) + 18px);
++}
++
++.bold-terminal.is-open {
++	opacity: 1;
++	pointer-events: auto;
++	transform: translateY(0);
++}
++
++.bold-terminal > header {
++	display: flex;
++	height: 38px;
++	box-sizing: border-box;
++	align-items: center;
++	justify-content: space-between;
++	padding: 0 8px 0 14px;
++	border-bottom: 1px solid rgb(255 255 255 / 7%);
++	background: #121720;
++	color: #778292;
++	font-family: var(--vscode-font-family, sans-serif);
++	font-size: 9px;
++	letter-spacing: .12em;
++}
++
++.bold-terminal > header > div {
++	display: flex;
++	gap: 4px;
++}
++
++.bold-terminal > header button {
++	height: 27px;
++	padding: 0 8px;
++	border: 0;
++	border-radius: 7px;
++	background: transparent;
++	color: #8f99a8;
++	cursor: pointer;
++	font-size: 11px;
++}
++
++.bold-terminal > header button:hover {
++	background: rgb(255 255 255 / 7%);
++	color: #d7dce6;
++}
++
++.bold-terminal__xterm {
++	height: calc(100% - 38px);
++	box-sizing: border-box;
++	padding: 7px 8px 5px;
++}
++
++.bold-terminal__xterm .xterm {
++	height: 100%;
++}
++
++.bold-frontend__content {
++	position: absolute;
++	top: var(--bold-topbar-height);
++	right: 10px;
++	bottom: calc(var(--bold-statusbar-height) + 8px);
++	left: var(--bold-shell-left);
++	overflow: hidden;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground, #d7dce6) 8%, transparent);
++	border-radius: 12px;
++	background: var(--vscode-editor-background, #11151b);
++	box-shadow: 0 16px 48px rgb(0 0 0 / 22%);
++	transition: right 180ms ease, left 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
++}
++
++body.ai-hub-edit-chat-mode .bold-frontend__content {
++	right: calc(var(--bold-chat-width) + 18px);
++}
++
++.bold-frontend__editor {
++	position: absolute;
++	inset: 0;
++}
++
++.bold-frontend__editor[hidden] {
++	display: none;
++}
++
++.bold-frontend__editor-empty {
++	position: absolute;
++	inset: 0;
++	display: flex;
++	flex-direction: column;
++	align-items: center;
++	justify-content: center;
++	gap: 10px;
++	color: color-mix(in srgb, var(--vscode-foreground, #d7dce6) 42%, transparent);
++	font-size: 12px;
++}
++
++.bold-frontend__editor-empty[hidden] {
++	display: none;
++}
++
++.bold-frontend__editor-empty strong {
++	color: var(--vscode-foreground, #d7dce6);
++	font-size: 16px;
++}
++
++.bold-frontend__transition {
++	position: absolute;
++	z-index: 5;
++	inset: 0;
++	display: flex;
++	flex-direction: column;
++	align-items: center;
++	justify-content: center;
++	gap: 9px;
++	background:
++		radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--vscode-focusBorder) 11%, transparent), transparent 34%),
++		color-mix(in srgb, var(--vscode-editor-background) 96%, #080b12);
++	color: var(--vscode-descriptionForeground);
++	font-size: 11px;
++	opacity: 1;
++	transition: opacity 140ms ease;
++}
++
++.bold-frontend__transition[hidden] {
++	display: none;
++}
++
++.bold-frontend__transition strong {
++	color: var(--vscode-foreground);
++	font-size: 14px;
++}
++
++.bold-frontend__transition-spinner {
++	width: 22px;
++	height: 22px;
++	box-sizing: border-box;
++	margin-bottom: 5px;
++	border: 2px solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
++	border-top-color: var(--vscode-focusBorder);
++	border-radius: 50%;
++	animation: bold-gateway-spin 700ms linear infinite;
++}
++
++.bold-frontend.is-transitioning .bold-frontend__content {
++	display: block;
++	z-index: 4;
++	right: 10px;
++	left: var(--bold-rail-width);
++	border-color: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent);
++	background: var(--vscode-editor-background, #11151b);
++	box-shadow: 0 18px 58px rgb(0 0 0 / 30%);
++	pointer-events: auto;
++}
++
++.bold-frontend__editor-mark {
++	display: grid;
++	width: 54px;
++	height: 54px;
++	place-items: center;
++	margin-bottom: 4px;
++	border: 1px solid #5897ff;
++	border-radius: 17px;
++	background: linear-gradient(145deg, #4f91ff, #2456b8);
++	box-shadow: 0 10px 30px rgb(43 105 222 / 25%);
++	color: #fff;
++	font-size: 22px;
++	font-weight: 750;
++}
++
++.bold-frontend__rail {
++	position: absolute;
++	top: 0;
++	bottom: 0;
++	left: 0;
++	display: flex;
++	width: var(--bold-rail-width);
++	box-sizing: border-box;
++	flex-direction: column;
++	align-items: center;
++	padding: calc(var(--bold-window-controls-height) + 12px) 8px 10px;
++	border-right: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++	background: color-mix(in srgb, var(--vscode-sideBar-background) 92%, #0a0d14);
++}
++
++.bold-frontend__brand {
++	display: grid;
++	width: 38px;
++	height: 38px;
++	place-items: center;
++	margin-bottom: 18px;
++	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent);
++	border-radius: 12px;
++	background:
++		linear-gradient(145deg, color-mix(in srgb, var(--vscode-focusBorder) 72%, #fff), color-mix(in srgb, var(--vscode-focusBorder) 45%, #0a0d14));
++	box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent);
++	color: #fff;
++	font-size: 17px;
++	font-weight: 750;
++}
++
++.bold-frontend__rail-group {
++	display: flex;
++	width: 100%;
++	flex-direction: column;
++	align-items: center;
++	gap: 5px;
++}
++
++.bold-frontend__rail-group--agents {
++	margin-top: 14px;
++	padding-top: 14px;
++	border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++.bold-frontend__rail-group--bottom {
++	margin-top: auto;
++}
++
++.bold-frontend__button {
++	display: flex;
++	min-width: 0;
++	border: 0;
++	background: transparent;
++	cursor: pointer;
++}
++
++.bold-frontend__rail .bold-frontend__button {
++	position: relative;
++	width: 48px;
++	height: 48px;
++	box-sizing: border-box;
++	flex-direction: column;
++	align-items: center;
++	justify-content: center;
++	gap: 1px;
++	border-radius: 12px;
++	color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
++}
++
++.bold-frontend__rail .bold-frontend__button:hover,
++.bold-frontend__rail .bold-frontend__button:focus-visible,
++.bold-frontend__rail .bold-frontend__button.is-active {
++	outline: 0;
++	background: color-mix(in srgb, var(--vscode-focusBorder) 11%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__rail .bold-frontend__button.is-active::before {
++	position: absolute;
++	top: 11px;
++	bottom: 11px;
++	left: -8px;
++	width: 3px;
++	border-radius: 0 4px 4px 0;
++	background: var(--vscode-focusBorder);
++	content: '';
++}
++
++.bold-frontend__button-icon {
++	display: grid;
++	min-width: 22px;
++	height: 22px;
++	place-items: center;
++	font-family: var(--vscode-editor-font-family);
++	font-size: 16px;
++	font-weight: 650;
++	line-height: 1;
++}
++
++.bold-frontend__button-label {
++	overflow: hidden;
++	max-width: 100%;
++	font-size: 9px;
++	font-weight: 550;
++	letter-spacing: .02em;
++	line-height: 12px;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__explorer {
++	position: absolute;
++	top: 0;
++	bottom: 0;
++	left: var(--bold-rail-width);
++	width: var(--bold-explorer-width);
++	box-sizing: border-box;
++	border-right: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++	background: color-mix(in srgb, var(--vscode-sideBar-background) 97%, transparent);
++}
++
++.bold-frontend__explorer-header {
++	display: grid;
++	height: 86px;
++	box-sizing: border-box;
++	grid-template-columns: 1fr auto;
++	grid-template-rows: 18px 30px;
++	align-items: center;
++	padding: 12px 12px 10px 16px;
++	border-bottom: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++.bold-frontend__eyebrow {
++	grid-column: 1 / -1;
++	color: color-mix(in srgb, var(--vscode-foreground) 43%, transparent);
++	font-size: 9px;
++	font-weight: 700;
++	letter-spacing: .12em;
++}
++
++.bold-frontend__workspace-title {
++	overflow: hidden;
++	font-size: 13px;
++	font-weight: 650;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__explorer-actions {
++	display: flex;
++	gap: 2px;
++}
++
++.bold-frontend__mini-button {
++	display: grid;
++	width: 26px;
++	height: 26px;
++	place-items: center;
++	border-radius: 7px;
++	color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
++}
++
++.bold-frontend__mini-button:hover,
++.bold-frontend__mini-button:focus-visible {
++	outline: 0;
++	background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__mini-button .bold-frontend__button-label {
++	display: none;
++}
++
++.bold-frontend__tree {
++	height: calc(100% - 86px - var(--bold-statusbar-height));
++	box-sizing: border-box;
++	overflow: auto;
++	padding: 8px 7px 16px;
++}
++
++.bold-frontend__tree-branch {
++	min-width: 0;
++}
++
++.bold-frontend__tree-row {
++	display: flex;
++	width: 100%;
++	height: 27px;
++	box-sizing: border-box;
++	align-items: center;
++	padding: 0 8px 0 calc(5px + var(--tree-depth) * 13px);
++	border: 0;
++	border-radius: 7px;
++	background: transparent;
++	color: color-mix(in srgb, var(--vscode-foreground) 76%, transparent);
++	cursor: default;
++	text-align: left;
++}
++
++.bold-frontend__tree-row:hover,
++.bold-frontend__tree-row:focus-visible {
++	outline: 0;
++	background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__tree-branch.is-root > .bold-frontend__tree-row {
++	height: 30px;
++	font-weight: 650;
++}
++
++.bold-frontend__tree-chevron {
++	display: grid;
++	width: 14px;
++	height: 18px;
++	flex: 0 0 14px;
++	place-items: center;
++	color: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
++	font-size: 17px;
++	transition: transform 120ms ease;
++}
++
++.bold-frontend__tree-branch.is-expanded > .bold-frontend__tree-row > .bold-frontend__tree-chevron {
++	transform: rotate(90deg);
++}
++
++.bold-frontend__file-icon {
++	width: 17px;
++	flex: 0 0 17px;
++	color: color-mix(in srgb, var(--vscode-focusBorder) 74%, var(--vscode-foreground));
++	font-size: 11px;
++	line-height: 1;
++	text-align: center;
++}
++
++.bold-frontend__file-icon.is-folder {
++	color: color-mix(in srgb, #d9a441 75%, var(--vscode-foreground));
++	font-size: 8px;
++}
++
++.bold-frontend__tree-name {
++	overflow: hidden;
++	min-width: 0;
++	font-size: 12px;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__tree-children:empty {
++	display: none;
++}
++
++.bold-frontend__tree-error {
++	padding: 5px 10px 6px 32px;
++	color: var(--vscode-errorForeground);
++	font-size: 11px;
++}
++
++.bold-frontend__empty-state {
++	display: flex;
++	flex-direction: column;
++	align-items: flex-start;
++	gap: 7px;
++	padding: 28px 14px;
++	color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
++	font-size: 12px;
++	line-height: 1.5;
++}
++
++.bold-frontend__empty-state strong {
++	color: var(--vscode-foreground);
++	font-size: 13px;
++}
++
++.bold-frontend__empty-action {
++	align-items: center;
++	gap: 6px;
++	margin-top: 5px;
++	padding: 7px 10px;
++	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent);
++	border-radius: 8px;
++	background: color-mix(in srgb, var(--vscode-focusBorder) 10%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__empty-action .bold-frontend__button-label {
++	font-size: 11px;
++}
++
++.bold-frontend__topbar {
++	position: absolute;
++	top: 0;
++	right: 0;
++	left: var(--bold-topbar-left);
++	display: flex;
++	height: var(--bold-topbar-height);
++	box-sizing: border-box;
++	align-items: center;
++	justify-content: space-between;
++	padding: 7px 12px 7px 10px;
++	background: color-mix(in srgb, var(--vscode-sideBar-background) 95%, #090c13);
++	-webkit-app-region: drag;
++}
++
++.bold-frontend__tabs,
++.bold-frontend__topbar-actions {
++	-webkit-app-region: no-drag;
++}
++
++.bold-frontend__tabs {
++	display: flex;
++	min-width: 0;
++	align-items: center;
++	gap: 4px;
++	overflow: auto hidden;
++}
++
++.bold-frontend__tab {
++	display: flex;
++	min-width: 88px;
++	max-width: 190px;
++	height: 34px;
++	box-sizing: border-box;
++	align-items: center;
++	border: 1px solid transparent;
++	border-radius: 9px;
++	color: color-mix(in srgb, var(--vscode-foreground) 56%, transparent);
++}
++
++.bold-frontend__tab:hover {
++	background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
++	color: color-mix(in srgb, var(--vscode-foreground) 82%, transparent);
++}
++
++.bold-frontend__tab.is-active {
++	border-color: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++	background: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent);
++	box-shadow: 0 5px 18px color-mix(in srgb, #000 13%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__tab-label,
++.bold-frontend__tab-close {
++	border: 0;
++	background: transparent;
++	color: inherit;
++	cursor: default;
++}
++
++.bold-frontend__tab-label {
++	overflow: hidden;
++	min-width: 0;
++	flex: 1;
++	padding: 0 4px 0 10px;
++	font-size: 11px;
++	text-align: left;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__tab-close {
++	display: grid;
++	width: 24px;
++	height: 24px;
++	flex: 0 0 24px;
++	place-items: center;
++	margin-right: 4px;
++	border-radius: 6px;
++	font-size: 15px;
++	opacity: 0;
++}
++
++.bold-frontend__tab:hover .bold-frontend__tab-close,
++.bold-frontend__tab.is-active .bold-frontend__tab-close,
++.bold-frontend__tab-close:focus-visible {
++	opacity: .7;
++}
++
++.bold-frontend__tab-close:hover {
++	background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
++	opacity: 1;
++}
++
++.bold-frontend__empty-tab {
++	padding-left: 8px;
++	color: color-mix(in srgb, var(--vscode-foreground) 35%, transparent);
++	font-size: 11px;
++}
++
++.bold-frontend__topbar-actions {
++	display: flex;
++	flex: 0 0 auto;
++	align-items: center;
++	gap: 6px;
++}
++
++.bold-frontend__search-button,
++.bold-frontend__topbar-button {
++	height: 32px;
++	box-sizing: border-box;
++	align-items: center;
++	gap: 7px;
++	padding: 0 10px;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++	border-radius: 9px;
++	background: color-mix(in srgb, var(--vscode-input-background) 88%, transparent);
++	color: color-mix(in srgb, var(--vscode-foreground) 65%, transparent);
++}
++
++.bold-frontend__search-button:hover,
++.bold-frontend__topbar-button:hover,
++.bold-frontend__search-button:focus-visible,
++.bold-frontend__topbar-button:focus-visible {
++	outline: 0;
++	border-color: color-mix(in srgb, var(--vscode-focusBorder) 42%, transparent);
++	background: color-mix(in srgb, var(--vscode-input-background) 96%, var(--vscode-focusBorder) 4%);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__search-button {
++	min-width: 180px;
++}
++
++.bold-frontend__search-button .bold-frontend__button-label,
++.bold-frontend__topbar-button .bold-frontend__button-label {
++	font-size: 10px;
++}
++
++.bold-frontend__statusbar {
++	position: absolute;
++	right: 0;
++	bottom: 0;
++	left: var(--bold-shell-left);
++	display: flex;
++	height: var(--bold-statusbar-height);
++	box-sizing: border-box;
++	align-items: center;
++	padding: 0 14px;
++	color: color-mix(in srgb, var(--vscode-foreground) 47%, transparent);
++	font-size: 10px;
++}
++
++.bold-frontend__status-item.is-connected {
++	color: color-mix(in srgb, #4dc97b 78%, var(--vscode-foreground));
++}
++
++.bold-frontend__status-item.is-error {
++	color: var(--vscode-errorForeground);
++}
++
++.bold-frontend__status-item--right {
++	margin-left: auto;
++}
++
++@media (max-width: 900px) {
++	body.bold-independent-frontend {
++		--bold-explorer-width: 220px;
++	}
++
++	.bold-frontend__search-button {
++		min-width: 34px;
++	}
++
++	.bold-frontend__search-button .bold-frontend__button-label,
++	.bold-frontend__topbar-button .bold-frontend__button-label {
++		display: none;
++	}
++}
++
++@media (max-width: 1000px) {
++	body.ai-hub-edit-chat-mode.bold-independent-frontend {
++		--bold-explorer-width: 0px;
++		--bold-chat-width: min(360px, 42vw);
++	}
++
++	body.ai-hub-edit-chat-mode .bold-frontend__explorer {
++		display: none;
++	}
++}
++
++@media (max-width: 680px) {
++	body.bold-independent-frontend {
++		--bold-explorer-width: 0px;
++	}
++
++	.bold-frontend__explorer {
++		display: none;
++	}
++}
++
++@media (prefers-reduced-motion: reduce) {
++	.bold-frontend *,
++	.bold-frontend *::before,
++	.bold-frontend *::after {
++		scroll-behavior: auto !important;
++		transition-duration: 0s !important;
++	}
++}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
+deleted file mode 100644
+index a436e04..0000000
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/modernWorkbench.css
++++ /dev/null
+@@ -1,466 +0,0 @@
+-/*---------------------------------------------------------------------------------------------
+- *  Copyright (c) Microsoft Corporation. All rights reserved.
+- *  Licensed under the MIT License. See License.txt in the project root for license information.
+- *--------------------------------------------------------------------------------------------*/
+-
+-body.bold-modern-workbench .monaco-workbench {
+-	background: var(--vscode-editor-background);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.titlebar {
+-	background: color-mix(in srgb, var(--vscode-titleBar-activeBackground) 92%, transparent);
+-	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.titlebar.inactive {
+-	background: color-mix(in srgb, var(--vscode-titleBar-inactiveBackground) 92%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.titlebar .command-center-center {
+-	border-radius: var(--vscode-cornerRadius-circle);
+-	transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.titlebar .command-center-center:not(.disabled) {
+-	border-color: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+-	box-shadow: inset 0 1px color-mix(in srgb, white 7%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.titlebar .command-center-center:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 82%, transparent);
+-	border-color: color-mix(in srgb, var(--vscode-focusBorder) 52%, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.activitybar {
+-	background: color-mix(in srgb, var(--vscode-activityBar-background) 96%, var(--vscode-editor-background) 4%);
+-	border-color: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .activitybar > .content .monaco-action-bar .action-item {
+-	padding: var(--vscode-spacing-size40) var(--vscode-spacing-size60);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .activitybar > .content .monaco-action-bar .action-label {
+-	border-radius: var(--vscode-cornerRadius-large);
+-	transition: color 120ms ease, background-color 120ms ease, transform 120ms ease;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .activitybar > .content .monaco-action-bar .action-label:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 82%, transparent);
+-	transform: translateY(-1px);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .activitybar > .content .monaco-action-bar .checked .action-label,
+-body.bold-modern-workbench .monaco-workbench .activitybar > .content .monaco-action-bar .action-label.checked {
+-	background: color-mix(in srgb, var(--vscode-activityBarBadge-background) 18%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.sidebar,
+-body.bold-modern-workbench .monaco-workbench .part.auxiliarybar,
+-body.bold-modern-workbench .monaco-workbench .part.panel {
+-	border-color: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.sidebar > .title,
+-body.bold-modern-workbench .monaco-workbench .part.auxiliarybar > .title,
+-body.bold-modern-workbench .monaco-workbench .part.panel > .title {
+-	background: color-mix(in srgb, currentColor 2%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.sidebar > .title .title-label h2,
+-body.bold-modern-workbench .monaco-workbench .part.auxiliarybar > .title .title-label h2 {
+-	font-size: var(--vscode-bodyFontSize-xSmall);
+-	font-weight: var(--vscode-agents-fontWeight-semiBold);
+-	letter-spacing: .06em;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .pane-header {
+-	border-radius: var(--vscode-cornerRadius-small);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-list-row {
+-	border-radius: var(--vscode-cornerRadius-small);
+-	transition: background-color 100ms ease;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor > .content .editor-group-container {
+-	background: var(--vscode-editor-background);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .tabs-and-actions-container {
+-	background: color-mix(in srgb, var(--vscode-editorGroupHeader-tabsBackground) 96%, var(--vscode-editor-background) 4%);
+-	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .tabs-container > .tab {
+-	margin: 4px 2px 0;
+-	border-radius: var(--vscode-cornerRadius-large) var(--vscode-cornerRadius-large) 0 0;
+-	transition: background-color 120ms ease, color 120ms ease;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .tabs-container > .tab:first-child {
+-	margin-left: var(--vscode-spacing-size60);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .tabs-container > .tab.active {
+-	box-shadow: inset 0 var(--vscode-strokeThickness) color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .tabs-container > .tab:not(.active):hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 82%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .editor-actions .action-label,
+-body.bold-modern-workbench .monaco-workbench .title-actions .action-label,
+-body.bold-modern-workbench .monaco-workbench .global-actions .action-label {
+-	border-radius: var(--vscode-cornerRadius-small);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .editor-actions .action-label:hover,
+-body.bold-modern-workbench .monaco-workbench .title-actions .action-label:hover,
+-body.bold-modern-workbench .monaco-workbench .global-actions .action-label:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 82%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.statusbar {
+-	border-top: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.statusbar .statusbar-item .statusbar-item-label {
+-	border-radius: var(--vscode-cornerRadius-small);
+-}
+-
+-body.bold-modern-workbench .quick-input-widget,
+-body.bold-modern-workbench .suggest-widget,
+-body.bold-modern-workbench .monaco-hover,
+-body.bold-modern-workbench .context-view .monaco-menu-container,
+-body.bold-modern-workbench .monaco-dialog-box {
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent) !important;
+-	border-radius: var(--vscode-cornerRadius-xLarge) !important;
+-	box-shadow: 0 20px 56px color-mix(in srgb, var(--vscode-widget-shadow) 64%, transparent) !important;
+-}
+-
+-body.bold-modern-workbench .quick-input-widget {
+-	overflow: hidden;
+-}
+-
+-body.bold-modern-workbench .quick-input-widget .quick-input-header {
+-	padding-top: 10px;
+-}
+-
+-body.bold-modern-workbench .notifications-toasts .notification-toast,
+-body.bold-modern-workbench .notifications-center {
+-	overflow: hidden;
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+-	border-radius: var(--vscode-cornerRadius-xLarge);
+-	box-shadow: 0 20px 56px color-mix(in srgb, var(--vscode-widget-shadow) 64%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-inputbox,
+-body.bold-modern-workbench .monaco-workbench .monaco-select-box,
+-body.bold-modern-workbench .quick-input-widget .monaco-inputbox {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-button {
+-	border-radius: var(--vscode-cornerRadius-large);
+-	font-weight: var(--vscode-agents-fontWeight-semiBold);
+-	transition: filter 120ms ease, transform 120ms ease;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-button:hover {
+-	filter: brightness(1.06);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-button:active {
+-	transform: translateY(1px);
+-}
+-
+-body.bold-modern-workbench .monaco-scrollable-element > .scrollbar > .slider {
+-	border-radius: var(--vscode-cornerRadius-circle);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .sash.hover:before,
+-body.bold-modern-workbench .monaco-workbench .sash.active:before {
+-	transition: background-color 100ms ease;
+-}
+-
+-/* Workbench surfaces */
+-body.bold-modern-workbench .monaco-workbench .part.sidebar > .content,
+-body.bold-modern-workbench .monaco-workbench .part.auxiliarybar > .content,
+-body.bold-modern-workbench .monaco-workbench .part.panel > .content {
+-	background: color-mix(in srgb, var(--vscode-sideBar-background) 97%, var(--vscode-editor-background) 3%);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor > .content {
+-	background:
+-		radial-gradient(circle at 100% 0, color-mix(in srgb, var(--vscode-focusBorder) 4%, transparent), transparent 32%),
+-		var(--vscode-editor-background);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.sidebar > .title,
+-body.bold-modern-workbench .monaco-workbench .part.auxiliarybar > .title {
+-	padding-inline: var(--vscode-spacing-size40);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.sidebar .composite.title,
+-body.bold-modern-workbench .monaco-workbench .part.auxiliarybar .composite.title {
+-	min-height: 42px;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .pane-composite-part .monaco-pane-view {
+-	padding: 0 var(--vscode-spacing-size40) var(--vscode-spacing-size40);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-pane-view .pane > .pane-header {
+-	margin: var(--vscode-spacing-size20) 0;
+-	padding-inline: var(--vscode-spacing-size80);
+-	background: color-mix(in srgb, var(--vscode-sideBarSectionHeader-background) 84%, transparent);
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-pane-view .pane > .pane-header:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 70%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .pane-body {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-list-row,
+-body.bold-modern-workbench .monaco-workbench .monaco-table-tr,
+-body.bold-modern-workbench .monaco-workbench .monaco-tree-sticky-row {
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-list-row.selected,
+-body.bold-modern-workbench .monaco-workbench .monaco-list-row.focused {
+-	box-shadow: inset var(--vscode-strokeThickness) 0 color-mix(in srgb, var(--vscode-focusBorder) 75%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-count-badge,
+-body.bold-modern-workbench .monaco-workbench .badge .badge-content,
+-body.bold-modern-workbench .monaco-workbench .monaco-keybinding-key {
+-	border-radius: var(--vscode-cornerRadius-circle);
+-}
+-
+-/* Navigation and editor chrome */
+-body.bold-modern-workbench .monaco-workbench .composite-bar .action-item .action-label {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .composite-bar .action-item .action-label:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 80%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .breadcrumbs-control {
+-	background: color-mix(in srgb, var(--vscode-breadcrumb-background) 94%, var(--vscode-editor-background) 6%);
+-	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .breadcrumbs-control .monaco-breadcrumb-item {
+-	border-radius: var(--vscode-cornerRadius-small);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .editor-instance {
+-	overflow: hidden;
+-	border-radius: 0 0 var(--vscode-cornerRadius-large) var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .editor-widget,
+-body.bold-modern-workbench .monaco-workbench .monaco-editor .find-widget,
+-body.bold-modern-workbench .monaco-workbench .monaco-editor .rename-box,
+-body.bold-modern-workbench .monaco-workbench .parameter-hints-widget {
+-	overflow: hidden;
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 14%, transparent) !important;
+-	border-radius: var(--vscode-cornerRadius-large) !important;
+-	box-shadow: 0 14px 38px color-mix(in srgb, var(--vscode-widget-shadow) 58%, transparent) !important;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-editor .find-widget .monaco-inputbox,
+-body.bold-modern-workbench .monaco-workbench .monaco-editor .find-widget .monaco-sash {
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.editor .editor-group-container > .title .tabs-container > .tab .tab-close {
+-	border-radius: var(--vscode-cornerRadius-small);
+-}
+-
+-/* Panel and terminal */
+-body.bold-modern-workbench .monaco-workbench .part.panel > .title {
+-	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .part.panel > .title .composite-bar .action-item.checked .action-label {
+-	background: color-mix(in srgb, var(--vscode-panelTitle-activeBorder) 12%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .pane-body.integrated-terminal .terminal-outer-container,
+-body.bold-modern-workbench .monaco-workbench .terminal-editor .terminal-outer-container {
+-	padding: var(--vscode-spacing-size40);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .pane-body.integrated-terminal .terminal-wrapper,
+-body.bold-modern-workbench .monaco-workbench .terminal-editor .terminal-wrapper {
+-	overflow: hidden;
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .pane-body.integrated-terminal .terminal-tabs-entry {
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-/* Welcome and empty states */
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedSlideCategories {
+-	padding: var(--vscode-spacing-size240) var(--vscode-spacing-size320);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedCategoriesContainer > .header .title {
+-	font-weight: var(--vscode-agents-fontWeight-semiBold);
+-	letter-spacing: -.025em;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedCategoriesContainer > .header .subtitle {
+-	color: var(--vscode-descriptionForeground);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedCategoriesContainer > .categories-column > div {
+-	padding: var(--vscode-spacing-size160);
+-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, transparent);
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+-	border-radius: var(--vscode-cornerRadius-xLarge);
+-	box-shadow: inset 0 var(--vscode-strokeThickness) color-mix(in srgb, white 5%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedSlideCategories li {
+-	padding: var(--vscode-spacing-size20) var(--vscode-spacing-size60);
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .gettingStartedSlideCategories li:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 76%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .gettingStartedContainer .getting-started-category,
+-body.bold-modern-workbench .monaco-workbench .walkThroughContent .getting-started-step {
+-	border-radius: var(--vscode-cornerRadius-large) !important;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .empty-view,
+-body.bold-modern-workbench .monaco-workbench .watermark-box {
+-	color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+-}
+-
+-/* Settings and extension management */
+-body.bold-modern-workbench .monaco-workbench .settings-editor > .settings-header {
+-	margin-top: var(--vscode-spacing-size160);
+-	padding: var(--vscode-spacing-size120) var(--vscode-spacing-size240);
+-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 74%, transparent);
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+-	border-radius: var(--vscode-cornerRadius-xLarge);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .settings-editor > .settings-header .suggest-input-container,
+-body.bold-modern-workbench .monaco-workbench .settings-editor > .settings-header .monaco-inputbox {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .settings-editor .settings-tabs-widget .action-label {
+-	border-radius: var(--vscode-cornerRadius-medium) var(--vscode-cornerRadius-medium) 0 0 !important;
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .settings-editor .settings-row-inner-container {
+-	margin: 0 var(--vscode-spacing-size40);
+-	padding-inline: var(--vscode-spacing-size120);
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .settings-editor .setting-item-control :is(input, select, textarea),
+-body.bold-modern-workbench .monaco-workbench .settings-editor .setting-item-control .monaco-inputbox {
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .extensions-viewlet .extension-list-item,
+-body.bold-modern-workbench .monaco-workbench .extensions-list .extension-list-item {
+-	margin: var(--vscode-spacing-size20) var(--vscode-spacing-size40);
+-	padding: var(--vscode-spacing-size80);
+-	border: var(--vscode-strokeThickness) solid transparent;
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .extensions-viewlet .extension-list-item:hover,
+-body.bold-modern-workbench .monaco-workbench .extensions-list .extension-list-item:hover {
+-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 72%, transparent);
+-	border-color: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+-}
+-
+-/* Search, SCM and forms */
+-body.bold-modern-workbench .monaco-workbench .search-view .search-widget,
+-body.bold-modern-workbench .monaco-workbench .scm-view .scm-input,
+-body.bold-modern-workbench .monaco-workbench .explorer-viewlet .explorer-folders-view {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .search-view .search-widget .monaco-inputbox,
+-body.bold-modern-workbench .monaco-workbench .scm-view .scm-input .monaco-inputbox {
+-	border-radius: var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench :is(input[type='text'], input[type='search'], input[type='password'], textarea, select) {
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-dropdown-with-primary > .action-container > .action-label:first-child {
+-	border-radius: var(--vscode-cornerRadius-large) 0 0 var(--vscode-cornerRadius-large);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .monaco-dropdown-with-primary > .dropdown-action-container > .action-label:last-child {
+-	border-radius: 0 var(--vscode-cornerRadius-large) var(--vscode-cornerRadius-large) 0;
+-}
+-
+-/* Menus, widgets and notifications */
+-body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical {
+-	padding: var(--vscode-spacing-size40);
+-}
+-
+-body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical .action-menu-item {
+-	border-radius: var(--vscode-cornerRadius-medium);
+-}
+-
+-body.bold-modern-workbench .context-view .monaco-menu .monaco-action-bar.vertical .action-menu-item:hover {
+-	background: color-mix(in srgb, var(--vscode-menu-selectionBackground) 86%, transparent);
+-}
+-
+-body.bold-modern-workbench .quick-input-list .monaco-list-row {
+-	margin-block: var(--vscode-spacing-size20);
+-}
+-
+-body.bold-modern-workbench .notifications-toasts .notification-toast .notification-list-item,
+-body.bold-modern-workbench .notifications-center .notification-list-item {
+-	background: color-mix(in srgb, var(--vscode-notifications-background) 96%, transparent);
+-}
+-
+-body.bold-modern-workbench .monaco-workbench .progress-container .progress-bit {
+-	border-radius: var(--vscode-cornerRadius-circle);
+-}
+-
+-@media (prefers-reduced-motion: reduce) {
+-	body.bold-modern-workbench *,
+-	body.bold-modern-workbench *::before,
+-	body.bold-modern-workbench *::after {
+-		scroll-behavior: auto !important;
+-		transition-duration: 0s !important;
+-	}
+-}
+-
+-@media (forced-colors: active) {
+-	body.bold-modern-workbench .quick-input-widget,
+-	body.bold-modern-workbench .suggest-widget,
+-	body.bold-modern-workbench .monaco-hover,
+-	body.bold-modern-workbench .context-view .monaco-menu-container,
+-	body.bold-modern-workbench .notifications-toasts .notification-toast {
+-		border-color: CanvasText !important;
+-	}
+-}
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+new file mode 100644
+index 0000000..5b0e152
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -0,0 +1,727 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import { IDisposable } from '../../../../base/common/lifecycle.js';
++import { URI } from '../../../../base/common/uri.js';
++import { ICodeEditor } from '../../../../editor/browser/editorBrowser.js';
++import { IEditorConstructionOptions } from '../../../../editor/browser/config/editorConfiguration.js';
++import { ITextModel } from '../../../../editor/common/model.js';
++import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendBridge, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab } from './boldFrontendProtocol.js';
++
++export interface IBoldFrontendEditorRuntime {
++	createEditor(host: HTMLElement, options: Readonly<IEditorConstructionOptions>): ICodeEditor;
++	createModel(contents: string, languageId: string, uri: URI): ITextModel;
++}
++
++interface IButtonOptions {
++	readonly className?: string;
++	readonly icon: string;
++	readonly label: string;
++	readonly title?: string;
++	readonly onClick: () => void;
++}
++
++interface IOpenDocument {
++	readonly id: string;
++	readonly name: string;
++	readonly model: ITextModel;
++	readonly modelListener: IDisposable;
++	savedAlternativeVersionId: number;
++}
++
++/** A standalone, framework-free frontend. It depends only on the narrow bridge above. */
++export class BoldFrontendApp {
++
++	readonly element: HTMLElement;
++
++	private readonly disposers: Array<() => void> = [];
++	private readonly workspaceTree: HTMLElement;
++	private readonly tabs: HTMLElement;
++	private readonly workspaceTitle: HTMLElement;
++	private readonly connectionStatus: HTMLElement;
++	private readonly providerStatus: HTMLElement;
++	private readonly editorHost: HTMLElement;
++	private readonly emptyEditor: HTMLElement;
++	private readonly transitionOverlay: HTMLElement;
++	private readonly transitionTitle: HTMLElement;
++	private readonly transitionDetail: HTMLElement;
++	private editor: ICodeEditor | undefined;
++	private editorInitialization: Promise<void> | undefined;
++	private readonly settingsDrawer: HTMLElement;
++	private readonly settingsBody: HTMLElement;
++	private readonly expandedFolders = new Set<string>();
++	private readonly openDocuments = new Map<string, IOpenDocument>();
++	private workspaceSignature = '';
++	private state: IBoldFrontendState | undefined;
++	private activeDocumentId: string | undefined;
++	private untitledCounter = 0;
++	private stateApplication = 0;
++	private switchingMode = false;
++	private pendingMode: BoldFrontendMode | undefined;
++
++	constructor(
++		private readonly document: Document,
++		private readonly bridge: IBoldFrontendBridge,
++		private readonly editorRuntime: IBoldFrontendEditorRuntime,
++	) {
++		this.element = this.createElement('div', 'bold-frontend');
++		this.element.setAttribute('role', 'application');
++		this.element.setAttribute('aria-label', 'Bold Code');
++
++		const rail = this.createElement('nav', 'bold-frontend__rail');
++		rail.setAttribute('aria-label', '主导航');
++		const brand = this.createElement('div', 'bold-frontend__brand', 'B');
++		brand.title = 'Bold Code';
++		rail.append(brand);
++
++		const railPrimary = this.createElement('div', 'bold-frontend__rail-group');
++		const editButton = this.createButton({ className: 'is-active', icon: '▱', label: '文件', title: '工作区文件', onClick: () => void this.openEditMode() });
++		editButton.dataset.mode = 'edit';
++		railPrimary.append(
++			editButton,
++			this.createButton({ icon: '⌕', label: '搜索', title: '快速打开', onClick: () => void this.runAction('quickOpen') }),
++			this.createButton({ icon: '>_', label: '终端', title: '切换终端', onClick: () => void this.runAction('terminal') }),
++		);
++		rail.append(railPrimary);
++
++		const railAgents = this.createElement('div', 'bold-frontend__rail-group bold-frontend__rail-group--agents');
++		const claudeButton = this.createButton({ icon: 'C', label: 'Claude', title: '打开 Claude Code', onClick: () => void this.switchMode('claudeAgent') });
++		claudeButton.dataset.mode = 'claudeAgent';
++		const codexButton = this.createButton({ icon: 'X', label: 'Codex', title: '打开 Codex', onClick: () => void this.switchMode('codexAgent') });
++		codexButton.dataset.mode = 'codexAgent';
++		railAgents.append(claudeButton, codexButton);
++		rail.append(railAgents);
++
++		const railBottom = this.createElement('div', 'bold-frontend__rail-group bold-frontend__rail-group--bottom');
++		railBottom.append(
++			this.createButton({ icon: '◎', label: 'Gateway', title: 'AI Gateway', onClick: () => void this.openGateway() }),
++			this.createButton({ icon: '⚙', label: '设置', title: 'AI 与应用设置', onClick: () => void this.toggleSettings() }),
++		);
++		rail.append(railBottom);
++
++		const explorer = this.createElement('aside', 'bold-frontend__explorer');
++		const explorerHeader = this.createElement('header', 'bold-frontend__explorer-header');
++		const explorerEyebrow = this.createElement('span', 'bold-frontend__eyebrow', 'WORKSPACE');
++		this.workspaceTitle = this.createElement('strong', 'bold-frontend__workspace-title', '正在载入…');
++		const explorerActions = this.createElement('div', 'bold-frontend__explorer-actions');
++		explorerActions.append(
++			this.createButton({ className: 'bold-frontend__mini-button', icon: '+', label: '新建文件', onClick: () => void this.runAction('newFile') }),
++			this.createButton({ className: 'bold-frontend__mini-button', icon: '↻', label: '刷新', onClick: () => void this.refresh() }),
++		);
++		explorerHeader.append(explorerEyebrow, this.workspaceTitle, explorerActions);
++		this.workspaceTree = this.createElement('div', 'bold-frontend__tree');
++		this.workspaceTree.setAttribute('role', 'tree');
++		explorer.append(explorerHeader, this.workspaceTree);
++
++		const topbar = this.createElement('header', 'bold-frontend__topbar');
++		this.tabs = this.createElement('div', 'bold-frontend__tabs');
++		this.tabs.setAttribute('role', 'tablist');
++		const topbarActions = this.createElement('div', 'bold-frontend__topbar-actions');
++		topbarActions.append(
++			this.createButton({ className: 'bold-frontend__search-button', icon: '⌕', label: '搜索文件或运行命令', onClick: () => void this.runAction('commandPalette') }),
++			this.createButton({ className: 'bold-frontend__topbar-button', icon: '+', label: '新文件', onClick: () => void this.runAction('newFile') }),
++		);
++		topbar.append(this.tabs, topbarActions);
++
++		const statusbar = this.createElement('footer', 'bold-frontend__statusbar');
++		this.connectionStatus = this.createElement('span', 'bold-frontend__status-item');
++		this.providerStatus = this.createElement('span', 'bold-frontend__status-item bold-frontend__status-item--right');
++		statusbar.append(this.connectionStatus, this.providerStatus);
++
++		const content = this.createElement('main', 'bold-frontend__content');
++		this.editorHost = this.createElement('div', 'bold-frontend__editor');
++		this.emptyEditor = this.createElement('section', 'bold-frontend__editor-empty');
++		this.emptyEditor.append(
++			this.createElement('span', 'bold-frontend__editor-mark', 'B'),
++			this.createElement('strong', undefined, 'Bold Code'),
++			this.createElement('span', undefined, '从左侧工作区打开文件，或按 ⌘N 新建草稿'),
++		);
++		this.transitionOverlay = this.createElement('section', 'bold-frontend__transition');
++		this.transitionOverlay.hidden = true;
++		this.transitionOverlay.inert = true;
++		this.transitionOverlay.setAttribute('aria-live', 'polite');
++		const transitionSpinner = this.createElement('span', 'bold-frontend__transition-spinner');
++		this.transitionTitle = this.createElement('strong', undefined, '正在切换工作区');
++		this.transitionDetail = this.createElement('span', undefined, '正在准备内容视图…');
++		this.transitionOverlay.append(transitionSpinner, this.transitionTitle, this.transitionDetail);
++		content.append(this.editorHost, this.emptyEditor, this.transitionOverlay);
++
++		this.settingsDrawer = this.createElement('aside', 'bold-frontend__settings');
++		this.settingsDrawer.setAttribute('aria-hidden', 'true');
++		this.settingsDrawer.inert = true;
++		const settingsHeader = this.createElement('header', 'bold-frontend__settings-header');
++		settingsHeader.append(
++			this.createElement('strong', undefined, 'AI Setting'),
++			this.createButton({ className: 'bold-frontend__settings-close', icon: '×', label: '关闭设置', onClick: () => this.closeSettings() }),
++		);
++		this.settingsBody = this.createElement('div', 'bold-frontend__settings-body');
++		this.settingsDrawer.append(settingsHeader, this.settingsBody);
++
++		this.element.append(rail, explorer, topbar, content, statusbar, this.settingsDrawer);
++		this.editorHost.hidden = true;
++		const handleEditorKeyDown = (event: KeyboardEvent) => {
++			if (!(event.metaKey || event.ctrlKey) || event.altKey) {
++				return;
++			}
++			if (event.key.toLowerCase() === 's') {
++				event.preventDefault();
++				event.stopPropagation();
++				void this.saveActiveDocument();
++			} else if (event.key.toLowerCase() === 'n') {
++				event.preventDefault();
++				event.stopPropagation();
++				this.createUntitledDocument();
++			}
++		};
++		this.editorHost.addEventListener('keydown', handleEditorKeyDown, true);
++		this.disposers.push(() => this.editorHost.removeEventListener('keydown', handleEditorKeyDown, true));
++		this.disposers.push(this.bridge.subscribe(state => {
++			void this.acceptState(state).catch(() => {
++				this.connectionStatus.textContent = '界面状态暂时无法同步';
++				this.connectionStatus.classList.add('is-error');
++			});
++		}));
++	}
++
++	async start(): Promise<void> {
++		await this.refresh();
++	}
++
++	private async initializeEditor(): Promise<void> {
++		if (this.editor) {
++			return;
++		}
++		if (!this.editorInitialization) {
++			this.editorInitialization = this.doInitializeEditor();
++		}
++		const initialization = this.editorInitialization;
++		try {
++			await initialization;
++		} catch (error) {
++			if (this.editorInitialization === initialization) {
++				this.editorInitialization = undefined;
++			}
++			throw error;
++		}
++	}
++
++	private async doInitializeEditor(): Promise<void> {
++		// Reuse the already-running Workbench editor kernel. Loading the standalone
++		// bundle into the same renderer would register a second service graph.
++		this.editor = this.editorRuntime.createEditor(this.editorHost, {
++			automaticLayout: false,
++			fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
++			fontSize: 13,
++			hover: { enabled: 'off' },
++			lineHeight: 21,
++			minimap: { enabled: true },
++			padding: { top: 16, bottom: 16 },
++			renderLineHighlight: 'all',
++			scrollBeyondLastLine: false,
++			smoothScrolling: true,
++		});
++		const resizeObserver = new ResizeObserver(() => this.editor?.layout());
++		resizeObserver.observe(this.editorHost);
++		this.disposers.push(() => resizeObserver.disconnect(), () => this.editor?.dispose());
++	}
++
++	dispose(): void {
++		for (const document of this.openDocuments.values()) {
++			document.modelListener.dispose();
++			document.model.dispose();
++		}
++		this.openDocuments.clear();
++		while (this.disposers.length) {
++			this.disposers.pop()?.();
++		}
++		this.element.remove();
++	}
++
++	private async refresh(): Promise<void> {
++		try {
++			this.workspaceSignature = '';
++			await this.acceptState(await this.bridge.getState());
++		} catch {
++			this.workspaceTitle.textContent = '无法载入工作区';
++			this.connectionStatus.textContent = '后端暂不可用';
++			this.connectionStatus.classList.add('is-error');
++		}
++	}
++
++	private async acceptState(state: IBoldFrontendState): Promise<void> {
++		const request = ++this.stateApplication;
++		this.applyState(state);
++		if (state.mode === 'edit') {
++			await this.initializeEditor();
++		}
++		if (request !== this.stateApplication) {
++			return;
++		}
++		this.editor?.layout();
++	}
++
++	private applyState(state: IBoldFrontendState): void {
++		this.state = state;
++		this.element.hidden = false;
++		this.element.classList.toggle('is-agent-mode', state.mode !== 'edit');
++		for (const button of this.element.querySelectorAll<HTMLElement>('[data-mode]')) {
++			button.classList.toggle('is-active', button.dataset.mode === state.mode);
++		}
++		this.workspaceTitle.textContent = state.workspaceName;
++		this.connectionStatus.textContent = state.gatewayConnected ? '● Gateway 已连接' : '○ Gateway 未连接';
++		this.connectionStatus.classList.toggle('is-connected', state.gatewayConnected);
++		const editChatName = state.editChatProvider === 'claude' ? 'Claude' : 'Codex';
++		this.providerStatus.textContent = state.mode === 'edit'
++			? `右侧对话 · ${editChatName}`
++			: `Claude ${state.claudeEnabled ? '已启用' : '未启用'}  ·  Codex ${state.codexEnabled ? '已启用' : '未启用'}`;
++		this.renderDocumentTabs();
++
++		const workspaceSignature = state.workspaceRoots.map(root => `${root.name}:${root.uri}`).join('|');
++		if (workspaceSignature !== this.workspaceSignature) {
++			this.workspaceSignature = workspaceSignature;
++			this.renderWorkspaceRoots(state.workspaceRoots);
++		}
++	}
++
++	private renderTabs(tabs: readonly IBoldFrontendTab[]): void {
++		this.tabs.replaceChildren();
++		if (!tabs.length) {
++			const emptyLabel = this.state?.mode === 'claudeAgent'
++				? 'Claude Code · 扩展渲染'
++				: this.state?.mode === 'codexAgent'
++					? 'Codex · 扩展渲染'
++					: '打开一个文件开始编辑';
++			const empty = this.createElement('div', 'bold-frontend__empty-tab', emptyLabel);
++			this.tabs.append(empty);
++			return;
++		}
++
++		for (const tab of tabs) {
++			const tabElement = this.createElement('div', `bold-frontend__tab${tab.active ? ' is-active' : ''}`);
++			tabElement.setAttribute('role', 'tab');
++			tabElement.setAttribute('aria-selected', String(tab.active));
++			const activate = this.createElement('button', 'bold-frontend__tab-label', `${tab.dirty ? '● ' : ''}${tab.label}`);
++			activate.type = 'button';
++			activate.addEventListener('click', () => this.activateDocument(tab.id));
++			const close = this.createElement('button', 'bold-frontend__tab-close', '×');
++			close.type = 'button';
++			close.title = `关闭 ${tab.label}`;
++			close.addEventListener('click', event => {
++				event.stopPropagation();
++				this.closeDocument(tab.id);
++			});
++			tabElement.append(activate, close);
++			this.tabs.append(tabElement);
++		}
++	}
++
++	private renderDocumentTabs(): void {
++		const tabs: IBoldFrontendTab[] = Array.from(this.openDocuments.values()).map(document => ({
++			id: document.id,
++			label: document.name,
++			active: document.id === this.activeDocumentId,
++			dirty: document.model.getAlternativeVersionId() !== document.savedAlternativeVersionId,
++		}));
++		this.renderTabs(tabs);
++	}
++
++	private renderWorkspaceRoots(roots: readonly IBoldFrontendFileEntry[]): void {
++		this.workspaceTree.replaceChildren();
++		this.expandedFolders.clear();
++		if (!roots.length) {
++			const empty = this.createElement('div', 'bold-frontend__empty-state');
++			empty.append(
++				this.createElement('strong', undefined, '尚未打开文件夹'),
++				this.createElement('span', undefined, '使用命令面板打开一个项目。'),
++				this.createButton({ className: 'bold-frontend__empty-action', icon: '⌘', label: '打开命令面板', onClick: () => void this.runAction('commandPalette') }),
++			);
++			this.workspaceTree.append(empty);
++			return;
++		}
++
++		for (const root of roots) {
++			const branch = this.createTreeEntry(root, 0, true);
++			this.workspaceTree.append(branch);
++			void this.expandFolder(root, branch, 0);
++		}
++	}
++
++	private createTreeEntry(entry: IBoldFrontendFileEntry, depth: number, root = false): HTMLElement {
++		const branch = this.createElement('div', `bold-frontend__tree-branch${root ? ' is-root' : ''}`);
++		const row = this.createElement('button', 'bold-frontend__tree-row');
++		row.type = 'button';
++		row.style.setProperty('--tree-depth', String(depth));
++		row.setAttribute('role', 'treeitem');
++		row.setAttribute('aria-label', entry.name);
++		const chevron = this.createElement('span', 'bold-frontend__tree-chevron', entry.directory ? '›' : '');
++		const icon = this.createElement('span', `bold-frontend__file-icon${entry.directory ? ' is-folder' : ''}`, entry.directory ? '◆' : '•');
++		const name = this.createElement('span', 'bold-frontend__tree-name', entry.name);
++		row.append(chevron, icon, name);
++		const children = this.createElement('div', 'bold-frontend__tree-children');
++		children.setAttribute('role', 'group');
++
++		row.addEventListener('click', () => {
++			if (entry.directory) {
++				if (this.expandedFolders.has(entry.uri)) {
++					this.expandedFolders.delete(entry.uri);
++					branch.classList.remove('is-expanded');
++					children.replaceChildren();
++				} else {
++					void this.expandFolder(entry, branch, depth);
++				}
++			} else {
++				void this.openDocument(entry.uri);
++			}
++		});
++
++		branch.append(row, children);
++		return branch;
++	}
++
++	private async expandFolder(entry: IBoldFrontendFileEntry, branch: HTMLElement, depth: number): Promise<void> {
++		if (this.expandedFolders.has(entry.uri)) {
++			return;
++		}
++		this.expandedFolders.add(entry.uri);
++		branch.classList.add('is-expanded', 'is-loading');
++		const childrenContainer = branch.querySelector<HTMLElement>(':scope > .bold-frontend__tree-children');
++		try {
++			const children = await this.bridge.listDirectory(entry.uri);
++			childrenContainer?.replaceChildren(...children.map(child => this.createTreeEntry(child, depth + 1)));
++		} catch {
++			childrenContainer?.replaceChildren(this.createElement('div', 'bold-frontend__tree-error', '无法读取此目录'));
++		} finally {
++			branch.classList.remove('is-loading');
++		}
++	}
++
++	private focusExplorer(): void {
++		this.workspaceTree.querySelector<HTMLElement>('.bold-frontend__tree-row')?.focus();
++	}
++
++	private async openEditMode(): Promise<void> {
++		if (this.state?.mode !== 'edit') {
++			await this.switchMode('edit');
++			return;
++		}
++		this.focusExplorer();
++	}
++
++	private async runAction(action: BoldFrontendAction): Promise<void> {
++		if (action === 'newFile') {
++			this.createUntitledDocument();
++			return;
++		}
++		if (action === 'quickOpen' || action === 'commandPalette') {
++			this.focusExplorer();
++			return;
++		}
++		await this.bridge.runAction(action);
++	}
++
++	private async openDocument(uri: string): Promise<void> {
++		if (!this.editor) {
++			return;
++		}
++		const existing = this.openDocuments.get(uri);
++		if (existing) {
++			this.activateDocument(uri);
++			return;
++		}
++
++		const document = await this.bridge.openFile(uri);
++		const model = this.editorRuntime.createModel(document.contents, document.languageId, URI.parse(document.uri));
++		const openDocument: IOpenDocument = {
++			id: document.uri,
++			name: document.name,
++			model,
++			modelListener: model.onDidChangeContent(() => this.renderDocumentTabs()),
++			savedAlternativeVersionId: model.getAlternativeVersionId(),
++		};
++		this.openDocuments.set(document.uri, openDocument);
++		this.activateDocument(document.uri);
++	}
++
++	private createUntitledDocument(): void {
++		if (!this.editor) {
++			return;
++		}
++		const number = ++this.untitledCounter;
++		const id = `untitled://bold/Untitled-${number}`;
++		const model = this.editorRuntime.createModel('', 'plaintext', URI.parse(id));
++		const document: IOpenDocument = {
++			id,
++			name: `Untitled-${number}`,
++			model,
++			modelListener: model.onDidChangeContent(() => this.renderDocumentTabs()),
++			savedAlternativeVersionId: model.getAlternativeVersionId(),
++		};
++		this.openDocuments.set(id, document);
++		this.activateDocument(id);
++	}
++
++	private activateDocument(id: string): void {
++		const document = this.openDocuments.get(id);
++		if (!document || !this.editor) {
++			return;
++		}
++		this.activeDocumentId = id;
++		this.editor.setModel(document.model);
++		this.emptyEditor.hidden = true;
++		this.editorHost.hidden = false;
++		this.editor.layout();
++		this.editor.focus();
++		this.renderDocumentTabs();
++	}
++
++	private closeDocument(id: string): void {
++		const document = this.openDocuments.get(id);
++		if (!document) {
++			return;
++		}
++		const wasActive = this.activeDocumentId === id;
++		document.modelListener.dispose();
++		document.model.dispose();
++		this.openDocuments.delete(id);
++		if (wasActive) {
++			const next = Array.from(this.openDocuments.keys()).at(-1);
++			if (next) {
++				this.activateDocument(next);
++			} else {
++				this.activeDocumentId = undefined;
++				this.editor?.setModel(null);
++				this.editorHost.hidden = true;
++				this.emptyEditor.hidden = false;
++			}
++		}
++		this.renderDocumentTabs();
++	}
++
++	private async saveActiveDocument(): Promise<void> {
++		const document = this.activeDocumentId ? this.openDocuments.get(this.activeDocumentId) : undefined;
++		if (!document || document.id.startsWith('untitled:')) {
++			return;
++		}
++		await this.bridge.saveFile(document.id, document.model.getValue());
++		document.savedAlternativeVersionId = document.model.getAlternativeVersionId();
++		this.renderDocumentTabs();
++	}
++
++	async openGateway(): Promise<void> {
++		await this.bridge.openGateway();
++	}
++
++	async toggleSettings(): Promise<void> {
++		if (this.settingsDrawer.classList.contains('is-open')) {
++			this.closeSettings();
++			return;
++		}
++		this.settingsDrawer.classList.add('is-open');
++		this.settingsDrawer.setAttribute('aria-hidden', 'false');
++		this.settingsDrawer.inert = false;
++		this.settingsBody.replaceChildren(this.createElement('div', 'bold-frontend__settings-loading', '正在读取 AI 配置…'));
++		try {
++			this.renderSettings(await this.bridge.getAiSettings());
++		} catch {
++			this.settingsBody.replaceChildren(this.createElement('div', 'bold-frontend__settings-error', '无法读取 AI 配置'));
++		}
++	}
++
++	private closeSettings(): void {
++		this.settingsDrawer.classList.remove('is-open');
++		this.settingsDrawer.setAttribute('aria-hidden', 'true');
++		this.settingsDrawer.inert = true;
++	}
++
++	private renderSettings(settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): void {
++		this.settingsBody.replaceChildren();
++		const intro = this.createElement('section', 'bold-frontend__settings-intro');
++		intro.append(
++			this.createElement('span', 'bold-frontend__eyebrow', 'AI WORKSPACE'),
++			this.createElement('h2', undefined, '模型与凭据'),
++			this.createElement('p', undefined, '选择编辑器右侧常驻的对话扩展，并管理 Claude 与 Codex 的原生配置。留空 API Key 会保留当前凭据。'),
++		);
++		this.settingsBody.append(intro);
++		this.settingsBody.append(
++			this.createEditChatProviderSettings(settings.editChatProvider),
++			this.createProviderSettings('claude', 'Claude Code', 'CL', settings.claudeBaseUrl, settings.claudeHasApiKey),
++			this.createProviderSettings('codex', 'Codex', 'CX', settings.codexBaseUrl, settings.codexHasApiKey),
++		);
++	}
++
++	private createEditChatProviderSettings(selectedProvider: BoldFrontendProvider): HTMLElement {
++		const card = this.createElement('section', 'bold-frontend__chat-preference');
++		const copy = this.createElement('div', 'bold-frontend__chat-preference-copy');
++		copy.append(
++			this.createElement('strong', undefined, '编辑器右侧对话'),
++			this.createElement('span', undefined, '编辑文件时常驻所选扩展；切换后立即刷新，无需重载窗口。'),
++		);
++		const choices = this.createElement('div', 'bold-frontend__chat-provider-choices');
++		choices.setAttribute('role', 'radiogroup');
++		choices.setAttribute('aria-label', '编辑器右侧对话扩展');
++		const status = this.createElement('span', 'bold-frontend__chat-provider-status');
++
++		const buttons: HTMLButtonElement[] = [];
++		for (const [provider, label, mark] of [
++			['claude', 'Claude', 'CL'],
++			['codex', 'Codex', 'CX'],
++		] as const) {
++			const button = this.createElement('button', `bold-frontend__chat-provider-choice${provider === selectedProvider ? ' is-selected' : ''}`);
++			button.type = 'button';
++			button.setAttribute('role', 'radio');
++			button.setAttribute('aria-checked', String(provider === selectedProvider));
++			button.append(
++				this.createElement('span', 'bold-frontend__chat-provider-mark', mark),
++				this.createElement('span', undefined, label),
++			);
++			button.addEventListener('click', () => {
++				if (button.classList.contains('is-selected')) {
++					return;
++				}
++				for (const choice of buttons) {
++					choice.disabled = true;
++				}
++				status.textContent = `正在切换到 ${label}…`;
++				void this.bridge.setEditChatProvider(provider).then(() => {
++					for (const choice of buttons) {
++						const selected = choice === button;
++						choice.classList.toggle('is-selected', selected);
++						choice.setAttribute('aria-checked', String(selected));
++					}
++					status.textContent = `编辑器右侧已切换为 ${label}`;
++				}, () => {
++					status.textContent = '切换失败，已保留原扩展';
++				}).finally(() => {
++					for (const choice of buttons) {
++						choice.disabled = false;
++					}
++				});
++			});
++			buttons.push(button);
++			choices.append(button);
++		}
++
++		card.append(copy, choices, status);
++		return card;
++	}
++
++	private createProviderSettings(provider: 'claude' | 'codex', title: string, mark: string, baseUrlValue: string, hasApiKey: boolean): HTMLElement {
++		const card = this.createElement('section', 'bold-frontend__provider-card');
++		const header = this.createElement('header', 'bold-frontend__provider-header');
++		header.append(
++			this.createElement('span', 'bold-frontend__provider-mark', mark),
++			this.createElement('strong', undefined, title),
++			hasApiKey ? this.createElement('span', 'bold-frontend__provider-connected', '已连接') : this.createElement('span'),
++		);
++		const form = this.createElement('form', 'bold-frontend__provider-form');
++		const baseUrlLabel = this.createElement('label', undefined, 'Base URL');
++		const baseUrl = this.createElement('input');
++		baseUrl.type = 'url';
++		baseUrl.value = baseUrlValue;
++		baseUrl.placeholder = 'https://…/v1';
++		const apiKeyLabel = this.createElement('label', undefined, hasApiKey ? 'API Key · 已配置，留空保持不变' : 'API Key');
++		const apiKey = this.createElement('input');
++		apiKey.type = 'password';
++		apiKey.autocomplete = 'off';
++		apiKey.placeholder = hasApiKey ? '••••••••' : 'sk-…';
++		const footer = this.createElement('div', 'bold-frontend__provider-actions');
++		const status = this.createElement('span', 'bold-frontend__provider-status');
++		const submit = this.createElement('button', 'bold-frontend__provider-save', '保存配置');
++		submit.type = 'submit';
++		footer.append(status, submit);
++		form.append(baseUrlLabel, baseUrl, apiKeyLabel, apiKey, footer);
++		form.addEventListener('submit', event => {
++			event.preventDefault();
++			submit.disabled = true;
++			status.textContent = '正在保存…';
++			void this.bridge.saveAiSettings(provider, baseUrl.value.trim(), apiKey.value).then(() => {
++				status.textContent = '已保存';
++				apiKey.value = '';
++			}, () => {
++				status.textContent = '保存失败';
++			}).finally(() => submit.disabled = false);
++		});
++		card.append(header, form);
++		return card;
++	}
++
++	private async switchMode(mode: BoldFrontendMode): Promise<void> {
++		if (!this.switchingMode && this.state?.mode === mode) {
++			return;
++		}
++
++		this.pendingMode = mode;
++		if (this.switchingMode) {
++			return;
++		}
++		this.switchingMode = true;
++		try {
++			while (this.pendingMode) {
++				const targetMode = this.pendingMode;
++				this.pendingMode = undefined;
++				if (this.state?.mode === targetMode) {
++					continue;
++				}
++
++				this.showModeTransition(targetMode);
++				try {
++					await this.bridge.setMode(targetMode);
++					await this.acceptState(await this.bridge.getState());
++					await new Promise<void>(resolve => this.document.defaultView?.requestAnimationFrame(() => resolve()) ?? resolve());
++				} catch {
++					try {
++						await this.acceptState(await this.bridge.getState());
++					} catch {
++						// Keep the last rendered state while displaying the transition error.
++					}
++					this.transitionTitle.textContent = '无法切换模式';
++					this.transitionDetail.textContent = '扩展视图暂时不可用，请稍后重试。';
++					await new Promise<void>(resolve => this.document.defaultView?.setTimeout(resolve, 1200) ?? resolve());
++				}
++			}
++		} finally {
++			this.hideModeTransition();
++			this.switchingMode = false;
++		}
++	}
++
++	private showModeTransition(mode: BoldFrontendMode): void {
++		const target = mode === 'claudeAgent' ? 'Claude Code' : mode === 'codexAgent' ? 'Codex' : '编辑器';
++		this.transitionTitle.textContent = `正在切换到 ${target}`;
++		this.transitionDetail.textContent = mode === 'edit' ? '正在恢复文件与编辑状态…' : '正在连接扩展渲染视图…';
++		this.transitionOverlay.hidden = false;
++		this.transitionOverlay.inert = false;
++		this.element.classList.add('is-transitioning');
++	}
++
++	private hideModeTransition(): void {
++		this.element.classList.remove('is-transitioning');
++		this.transitionOverlay.hidden = true;
++		this.transitionOverlay.inert = true;
++	}
++
++	private createButton(options: IButtonOptions): HTMLButtonElement {
++		const button = this.createElement('button', `bold-frontend__button${options.className ? ` ${options.className}` : ''}`);
++		button.type = 'button';
++		button.title = options.title ?? options.label;
++		button.setAttribute('aria-label', options.label);
++		const icon = this.createElement('span', 'bold-frontend__button-icon', options.icon);
++		const label = this.createElement('span', 'bold-frontend__button-label', options.label);
++		button.append(icon, label);
++		button.addEventListener('click', options.onClick);
++		return button;
++	}
++
++	private createElement<K extends keyof HTMLElementTagNameMap>(tagName: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
++		const element = this.document.createElement(tagName);
++		if (className) {
++			element.className = className;
++		}
++		if (text !== undefined) {
++			element.append(this.document.createTextNode(text));
++		}
++		return element;
++	}
++}
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+new file mode 100644
+index 0000000..dfc14d8
+--- /dev/null
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+@@ -0,0 +1,69 @@
++/*---------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++export type BoldFrontendMode = 'edit' | 'claudeAgent' | 'codexAgent';
++export type BoldFrontendProvider = 'claude' | 'codex';
++
++export type BoldFrontendAction = 'commandPalette' | 'newFile' | 'quickOpen' | 'terminal';
++
++export interface IBoldFrontendFileEntry {
++	readonly name: string;
++	readonly uri: string;
++	readonly directory: boolean;
++}
++
++export interface IBoldFrontendTab {
++	readonly id: string;
++	readonly label: string;
++	readonly active: boolean;
++	readonly dirty: boolean;
++}
++
++export interface IBoldFrontendDocument {
++	readonly uri: string;
++	readonly name: string;
++	readonly languageId: string;
++	readonly contents: string;
++}
++
++export interface IBoldFrontendAiSettings {
++	readonly claudeBaseUrl: string;
++	readonly claudeHasApiKey: boolean;
++	readonly codexBaseUrl: string;
++	readonly codexHasApiKey: boolean;
++	readonly editChatProvider: BoldFrontendProvider;
++}
++
++export interface IBoldFrontendState {
++	readonly mode: BoldFrontendMode;
++	readonly workspaceName: string;
++	readonly workspaceRoots: readonly IBoldFrontendFileEntry[];
++	readonly tabs: readonly IBoldFrontendTab[];
++	readonly claudeEnabled: boolean;
++	readonly codexEnabled: boolean;
++	readonly gatewayConnected: boolean;
++	readonly editChatProvider: BoldFrontendProvider;
++}
++
++/**
++ * The frontend's complete privileged boundary. Implementations may use VS Code today and a
++ * standalone backend later, while this UI remains unchanged.
++ */
++export interface IBoldFrontendBridge {
++	getState(): Promise<IBoldFrontendState>;
++	listDirectory(uri: string): Promise<readonly IBoldFrontendFileEntry[]>;
++	openFile(uri: string): Promise<IBoldFrontendDocument>;
++	saveFile(uri: string, contents: string): Promise<void>;
++	activateTab(id: string): Promise<void>;
++	closeTab(id: string): Promise<void>;
++	runAction(action: BoldFrontendAction): Promise<void>;
++	setMode(mode: BoldFrontendMode): Promise<void>;
++	setEditChatProvider(provider: BoldFrontendProvider): Promise<void>;
++	getAiSettings(): Promise<IBoldFrontendAiSettings>;
++	saveAiSettings(provider: 'claude' | 'codex', baseUrl: string, apiKey: string): Promise<void>;
++	openGateway(): Promise<void>;
++	openSettings(): Promise<void>;
++	subscribe(listener: (state: IBoldFrontendState) => void): () => void;
++}
+diff --git a/src/vs/workbench/electron-browser/desktop.main.ts b/src/vs/workbench/electron-browser/desktop.main.ts
+index 0520aa3..50dacf3 100644
+--- a/src/vs/workbench/electron-browser/desktop.main.ts
++++ b/src/vs/workbench/electron-browser/desktop.main.ts
+@@ -128,7 +128,9 @@ export class DesktopMain extends Disposable {
+ 		// (fixes https://github.com/microsoft/vscode/issues/187982)
+ 		this.applyWindowZoomLevel(services.configurationService);
+ 
+-		// Create Workbench
++		// Create the shared backend kernel once for every Bold mode. The native
++		// workbench parts are never used as the product frontend; the Bold shell
++		// owns the window and only exposes the selected extension Webview surface.
+ 		const workbench = new Workbench(mainWindow.document.body, {
+ 			extraClasses: this.getExtraClasses(),
+ 			resetLayout: this.configuration['disable-layout-restore'] === true
