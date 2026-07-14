@@ -1,0 +1,140 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+index 0730af6be4088ad611bdad3b4b07916880821775..633b34d67a463563937b1ed197c0af5e6cfc5f6b 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiConfigService.ts
+@@ -5,7 +5,7 @@
+ 
+ import { VSBuffer } from '../../../../base/common/buffer.js';
+ import { URI } from '../../../../base/common/uri.js';
+-import { IFileService } from '../../../../platform/files/common/files.js';
++import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
+ import { INativeEnvironmentService } from '../../../../platform/environment/common/environment.js';
+ import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+@@ -57,6 +57,34 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 		}
+ 	}
+ 
++	private async readJsonForUpdate(uri: URI): Promise<Record<string, any>> {
++		let contents: string;
++		try {
++			contents = (await this.fileService.readFile(uri)).value.toString();
++		} catch (error) {
++			if (toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND) {
++				return {};
++			}
++			throw error;
++		}
++		const parsed = JSON.parse(contents);
++		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
++			throw new Error(`Cannot update non-object JSON configuration: ${uri.toString()}`);
++		}
++		return parsed;
++	}
++
++	private async readTextForUpdate(uri: URI): Promise<string> {
++		try {
++			return (await this.fileService.readFile(uri)).value.toString();
++		} catch (error) {
++			if (toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND) {
++				return '';
++			}
++			throw error;
++		}
++	}
++
+ 	private async readTextIfExists(uri: URI): Promise<string> {
+ 		try {
+ 			const content = await this.fileService.readFile(uri);
+@@ -147,13 +175,15 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 
+ 	async saveClaudeSettings(settings: IAiProviderSettings): Promise<void> {
+ 		const uri = this.claudeSettingsUri;
+-		const json = await this.readJsonIfExists(uri);
++		const json = await this.readJsonForUpdate(uri);
++		if (json.env !== undefined && (!json.env || typeof json.env !== 'object' || Array.isArray(json.env))) {
++			throw new Error(`Cannot update non-object env configuration: ${uri.toString()}`);
++		}
+ 		json.env = {
+ 			...json.env,
+ 			ANTHROPIC_BASE_URL: settings.baseUrl,
+ 			ANTHROPIC_AUTH_TOKEN: settings.apiKey,
+ 		};
+-		json.claudeCode = { ...json.claudeCode, disableLoginPrompt: true };
+ 		await this.writeFile(uri, JSON.stringify(json, null, 2) + '\n');
+ 	}
+ 
+@@ -166,13 +196,13 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+ 
+ 	private async writeCodexConfigToml(baseUrl: string): Promise<void> {
+ 		const uri = this.codexConfigTomlUri;
+-		const existing = await this.readTextIfExists(uri);
++		const existing = await this.readTextForUpdate(uri);
+ 		await this.writeFile(uri, mergeCodexConfigToml(existing, baseUrl));
+ 	}
+ 
+ 	private async writeCodexAuthJson(apiKey: string): Promise<void> {
+ 		const uri = this.codexAuthJsonUri;
+-		const json = await this.readJsonIfExists(uri);
++		const json = await this.readJsonForUpdate(uri);
+ 		json.auth_mode = 'apikey';
+ 		json.OPENAI_API_KEY = apiKey;
+ 		await this.writeFile(uri, JSON.stringify(json, null, 2) + '\n');
+@@ -198,7 +228,8 @@ export class AiConfigService implements IAiConfigService, IAiExtensionHostEnviro
+  * is narrow enough that a targeted text merge is safer than adding a new dependency.
+  */
+ export function mergeCodexConfigToml(existing: string, baseUrl: string): string {
+-	const lines = existing.length ? existing.split(/\r?\n/) : [];
++	const eol = existing.includes('\r\n') ? '\r\n' : '\n';
++	const lines = existing.length ? existing.replace(/\r?\n$/, '').split(/\r?\n/) : [];
+ 
+ 	const sectionHeaderIndex = lines.findIndex(l => /^\s*\[/.test(l));
+ 	const preambleEnd = sectionHeaderIndex === -1 ? lines.length : sectionHeaderIndex;
+@@ -214,12 +245,15 @@ export function mergeCodexConfigToml(existing: string, baseUrl: string): string
+ 	}
+ 
+ 	const ourHeader = `[model_providers.${CODEX_PROVIDER_ID}]`;
++	const requiredProviderFields: ReadonlyArray<readonly [string, string]> = [
++		['name', 'name = "AI Hub Gateway"'],
++		['base_url', `base_url = ${JSON.stringify(baseUrl)}`],
++		['env_key', `env_key = "${CODEX_ENV_KEY}"`],
++		['wire_api', 'wire_api = "responses"'],
++	];
+ 	const ourBlock = [
+ 		ourHeader,
+-		'name = "AI Hub Gateway"',
+-		`base_url = "${baseUrl}"`,
+-		`env_key = "${CODEX_ENV_KEY}"`,
+-		'wire_api = "responses"',
++		...requiredProviderFields.map(([, line]) => line),
+ 	];
+ 
+ 	const ourHeaderIndex = rest.findIndex(l => l.trim() === ourHeader);
+@@ -233,13 +267,24 @@ export function mergeCodexConfigToml(existing: string, baseUrl: string): string
+ 			merged.push('');
+ 		}
+ 		merged.push(...ourBlock);
+-		return merged.join('\n') + '\n';
++		return merged.join(eol) + eol;
+ 	}
+ 
+ 	let ourBlockEnd = rest.findIndex((l, i) => i > ourHeaderIndex && /^\s*\[/.test(l));
+ 	if (ourBlockEnd === -1) {
+ 		ourBlockEnd = rest.length;
+ 	}
+-	const newRest = [...rest.slice(0, ourHeaderIndex), ...ourBlock, ...rest.slice(ourBlockEnd)];
+-	return [...preamble, ...newRest].join('\n') + '\n';
++	const existingBlock = rest.slice(ourHeaderIndex, ourBlockEnd);
++	const updatedBlock = [...existingBlock];
++	for (const [key, replacement] of requiredProviderFields) {
++		const keyPattern = new RegExp(`^\\s*${key}\\s*=`);
++		const keyIndex = updatedBlock.findIndex(line => keyPattern.test(line));
++		if (keyIndex === -1) {
++			updatedBlock.push(replacement);
++		} else if (key === 'base_url' || key === 'env_key' || key === 'wire_api') {
++			updatedBlock[keyIndex] = replacement;
++		}
++	}
++	const newRest = [...rest.slice(0, ourHeaderIndex), ...updatedBlock, ...rest.slice(ourBlockEnd)];
++	return [...preamble, ...newRest].join(eol) + eol;
+ }

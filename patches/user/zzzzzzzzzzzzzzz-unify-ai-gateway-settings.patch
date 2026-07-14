@@ -1,0 +1,1283 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+index 3976425..dd4f3c6 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -15,10 +15,12 @@ import { INativeEnvironmentService } from '../../../../platform/environment/comm
+ import { IFileService } from '../../../../platform/files/common/files.js';
+ import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+ import { IProductService } from '../../../../platform/product/common/productService.js';
++import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
++import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+ import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+ import { IEditorService } from '../../../services/editor/common/editorService.js';
+-import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab } from '../frontend/boldFrontendProtocol.js';
++import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
+ import { IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ import { BoldGatewayController } from './boldGatewayController.js';
+ import { BoldTerminalController } from './boldTerminalController.js';
+@@ -28,9 +30,11 @@ const FRONTEND_ACTION_COMMANDS: Readonly<Record<BoldFrontendAction, string>> = {
+ 	newFile: 'workbench.action.files.newUntitledFile',
+ 	quickOpen: 'workbench.action.quickOpen',
+ 	terminal: 'workbench.action.terminal.toggleTerminal',
++	remoteConnect: 'openremotessh.openEmptyWindow',
+ };
+ 
+ const NATIVE_WELCOME_EDITOR_TYPE_ID = 'workbench.editors.gettingStartedInput';
++const GATEWAY_API_KEY_STORAGE_PREFIX = 'aiHub.gatewayApiKey.';
+ 
+ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
+ 	'.c': 'c', '.cc': 'cpp', '.cpp': 'cpp', '.cs': 'csharp', '.css': 'css', '.go': 'go',
+@@ -66,6 +70,8 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+ 		@IEditorService private readonly editorService: IEditorService,
+ 		@ICommandService private readonly commandService: ICommandService,
++		@IQuickInputService quickInputService: IQuickInputService,
++		@IStorageService private readonly storageService: IStorageService,
+ 	) {
+ 		super();
+ 		const browserViewService = ProxyChannel.toService<IBrowserViewService>(mainProcessService.getChannel(ipcBrowserViewChannelName));
+@@ -74,18 +80,26 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 			mainWindow.vscodeWindowId,
+ 			productService.aiGatewayUrl,
+ 			browserViewService,
+-			(baseUrl, apiKey) => this.aiConfigService.saveCodexSettings({ baseUrl, apiKey }),
++			(provider, baseUrl, apiKey) => provider === 'claude'
++				? this.aiConfigService.saveClaudeSettings({ baseUrl, apiKey })
++				: this.aiConfigService.saveCodexSettings({ baseUrl, apiKey }),
++			() => void this.emitState(),
+ 		)) : undefined;
+ 		this.terminalController = this._register(new BoldTerminalController(mainWindow.document, mainProcessService, workspaceContextService, environmentService));
+ 		this._register(this.editorService.onDidEditorsChange(() => void this.emitState()));
+ 		this._register(this.editorService.onDidActiveEditorChange(() => void this.emitState()));
+ 		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => void this.emitState()));
+ 		this._register(this.workspaceContextService.onDidChangeWorkspaceName(() => void this.emitState()));
++		this._register(quickInputService.onShow(() => mainWindow.document.body.classList.add('bold-native-overlay-active')));
++		this._register(quickInputService.onHide(() => mainWindow.document.body.classList.remove('bold-native-overlay-active')));
+ 	}
+ 
+ 	async getState(): Promise<IBoldFrontendState> {
+ 		await this.modeController.initialize();
+-		const aiState = await this.aiConfigService.getState();
++		const [aiState, gateway] = await Promise.all([
++			this.aiConfigService.getState(),
++			this.getGatewayAccount(),
++		]);
+ 		const mode = this.modeController.mode;
+ 		await this.prepareEditSurface(mode);
+ 		const workspace = this.workspaceContextService.getWorkspace();
+@@ -104,7 +118,9 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 			tabs: this.collectTabs(),
+ 			claudeEnabled: aiState.claudeEnabled,
+ 			codexEnabled: aiState.codexEnabled,
+-			gatewayConnected: aiState.claudeHasApiKey || aiState.codexHasApiKey,
++			gatewayStatus: gateway.status,
++			gatewayBalance: gateway.balance,
++			gatewayTodayUsage: gateway.todayUsage,
+ 			editChatProvider: aiState.editChatProvider,
+ 		};
+ 	}
+@@ -172,13 +188,19 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 	}
+ 
+ 	async getAiSettings(): Promise<IBoldFrontendAiSettings> {
+-		const state = await this.aiConfigService.getState();
++		const [state, gateway] = await Promise.all([
++			this.aiConfigService.getState(),
++			this.getGatewayAccount(true),
++		]);
+ 		return {
+ 			claudeBaseUrl: state.claudeBaseUrl,
+ 			claudeHasApiKey: state.claudeHasApiKey,
+ 			codexBaseUrl: state.codexBaseUrl,
+ 			codexHasApiKey: state.codexHasApiKey,
+ 			editChatProvider: state.editChatProvider,
++			claudeGatewayApiKeyId: this.getSelectedGatewayApiKey('claude'),
++			codexGatewayApiKeyId: this.getSelectedGatewayApiKey('codex'),
++			gateway,
+ 		};
+ 	}
+ 
+@@ -191,6 +213,30 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		} else {
+ 			await this.aiConfigService.saveCodexSettings({ baseUrl, apiKey });
+ 		}
++		this.storageService.remove(`${GATEWAY_API_KEY_STORAGE_PREFIX}${provider}`, StorageScope.PROFILE);
++		await this.emitState();
++	}
++
++	async selectGatewayApi(provider: BoldFrontendProvider, apiKeyId: number): Promise<void> {
++		if (!this.gatewayController) {
++			throw new Error('AI Gateway 未配置');
++		}
++		await this.gatewayController.selectApi(provider, apiKeyId);
++		this.storageService.store(`${GATEWAY_API_KEY_STORAGE_PREFIX}${provider}`, String(apiKeyId), StorageScope.PROFILE, StorageTarget.USER);
++		await this.emitState();
++	}
++
++	async updateGatewayApiGroup(apiKeyId: number, groupId: number): Promise<void> {
++		if (!this.gatewayController) {
++			throw new Error('AI Gateway 未配置');
++		}
++		await this.gatewayController.updateApiGroup(apiKeyId, groupId);
++	}
++
++	async logoutGateway(): Promise<void> {
++		await this.gatewayController?.logout();
++		this.storageService.remove(`${GATEWAY_API_KEY_STORAGE_PREFIX}claude`, StorageScope.PROFILE);
++		this.storageService.remove(`${GATEWAY_API_KEY_STORAGE_PREFIX}codex`, StorageScope.PROFILE);
+ 	}
+ 
+ 	async openGateway(): Promise<void> {
+@@ -199,6 +245,15 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 
+ 	async openSettings(): Promise<void> { }
+ 
++	private getSelectedGatewayApiKey(provider: BoldFrontendProvider): number | undefined {
++		const value = Number(this.storageService.get(`${GATEWAY_API_KEY_STORAGE_PREFIX}${provider}`, StorageScope.PROFILE));
++		return Number.isFinite(value) && value > 0 ? value : undefined;
++	}
++
++	private async getGatewayAccount(force = false): Promise<IBoldGatewayAccount> {
++		return this.gatewayController?.getAccount(force) ?? { status: 'unavailable', apiKeys: [], groups: [], message: 'AI Gateway 未配置' };
++	}
++
+ 	subscribe(listener: (state: IBoldFrontendState) => void): () => void {
+ 		this.listeners.add(listener);
+ 		return () => this.listeners.delete(listener);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+index 7a45f62..4e55da3 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+@@ -7,12 +7,23 @@ import { getZoomFactor } from '../../../../base/browser/browser.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+ import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+ import { BrowserViewStorageScope, IBrowserViewService } from '../../../../platform/browserView/common/browserView.js';
++import { BoldFrontendProvider, IBoldGatewayAccount, IBoldGatewayApiKey, IBoldGatewayGroup } from '../frontend/boldFrontendProtocol.js';
+ 
+-type GatewayStatus = 'authenticated' | 'noKey' | 'signedOut' | 'twoFactor' | 'error';
++type GatewayStatus = 'authenticated' | 'signedOut' | 'twoFactor' | 'error';
++
++interface IGatewayApiKeySecret extends IBoldGatewayApiKey {
++	readonly key: string;
++}
+ 
+ interface IGatewayScriptResult {
+ 	readonly status: GatewayStatus;
+-	readonly apiKey?: string;
++	readonly accountLabel?: string;
++	readonly email?: string;
++	readonly balance?: number;
++	readonly todayUsage?: number;
++	readonly apiBaseUrl?: string;
++	readonly apiKeys?: readonly IGatewayApiKeySecret[];
++	readonly groups?: readonly IBoldGatewayGroup[];
+ 	readonly message?: string;
+ 	readonly tempToken?: string;
+ 	readonly userEmailMasked?: string;
+@@ -20,17 +31,29 @@ interface IGatewayScriptResult {
+ 
+ const GATEWAY_VIEW_ID = 'bold-ai-gateway';
+ const KEY_POLL_INTERVAL = 2000;
++const ACCOUNT_CACHE_TTL = 60_000;
+ 
+ const SESSION_SCRIPT = `(async () => {
+ 	const storage = window.localStorage;
+-	const clearAuth = () => ['auth_token', 'refresh_token', 'auth_user', 'token_expires_at'].forEach(key => storage.removeItem(key));
++	const clearAuth = () => ['auth_token', 'refresh_token', 'auth_user', 'token_expires_at', 'pending_auth_session'].forEach(key => storage.removeItem(key));
+ 	const unwrap = payload => payload && typeof payload.code === 'number' ? (payload.code === 0 ? payload.data : undefined) : payload;
+ 	const readJson = async response => { try { return await response.json(); } catch { return undefined; } };
+-	const requestKeys = token => fetch('/api/v1/keys?page=1&page_size=100&status=active&sort_by=created_at&sort_order=desc', { credentials: 'include', headers: { Authorization: 'Bearer ' + token } });
++	const request = (path, token, init = {}) => fetch('/api/v1' + path, { ...init, credentials: 'include', headers: { ...(init.headers || {}), Authorization: 'Bearer ' + token } });
++	const requestAllKeys = async token => {
++		const items = [];
++		for (let page = 1; ; page++) {
++			const response = await request('/keys?page=' + page + '&page_size=100&status=active&sort_by=created_at&sort_order=desc', token);
++			const payload = await readJson(response);
++			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) { throw new Error(payload?.message || '读取 API Key 失败'); }
++			const data = unwrap(payload) || {};
++			items.push(...(Array.isArray(data.items) ? data.items : []));
++			if (page >= Number(data.pages || 1)) { return items; }
++		}
++	};
+ 	try {
+ 		let token = storage.getItem('auth_token');
+ 		if (!token) { return { status: 'signedOut' }; }
+-		let response = await requestKeys(token);
++		let response = await request('/auth/me', token);
+ 		if (response.status === 401) {
+ 			const refreshToken = storage.getItem('refresh_token');
+ 			if (!refreshToken) { clearAuth(); return { status: 'signedOut' }; }
+@@ -40,17 +63,69 @@ const SESSION_SCRIPT = `(async () => {
+ 			token = refreshed.access_token;
+ 			storage.setItem('auth_token', token);
+ 			if (typeof refreshed.refresh_token === 'string') { storage.setItem('refresh_token', refreshed.refresh_token); }
+-			response = await requestKeys(token);
++			response = await request('/auth/me', token);
+ 		}
+-		const payload = await readJson(response);
+-		if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) { return { status: response.status === 401 ? 'signedOut' : 'error', message: payload?.message || '读取 API Key 失败' }; }
+-		const data = unwrap(payload);
+-		const items = Array.isArray(data?.items) ? data.items : [];
+-		const item = items.find(candidate => candidate?.status === 'active' && typeof candidate?.key === 'string' && candidate.key.trim().length >= 8);
+-		return item ? { status: 'authenticated', apiKey: item.key.trim() } : { status: 'noKey' };
++		const userPayload = await readJson(response);
++		if (!response.ok || (userPayload && typeof userPayload.code === 'number' && userPayload.code !== 0)) { return { status: response.status === 401 ? 'signedOut' : 'error', message: userPayload?.message || '读取账号失败' }; }
++		const [items, groupsResponse, statsResponse, settingsResponse] = await Promise.all([
++			requestAllKeys(token),
++			request('/groups/available', token),
++			request('/usage/dashboard/stats', token),
++			request('/settings/public', token),
++		]);
++		const [groupsPayload, statsPayload, settingsPayload] = await Promise.all([groupsResponse, statsResponse, settingsResponse].map(readJson));
++		if (!groupsResponse.ok || !statsResponse.ok) { return { status: 'error', message: '读取 Gateway 账号数据失败' }; }
++		const userData = unwrap(userPayload);
++		const user = userData?.user || userData || {};
++		const groupsData = unwrap(groupsPayload);
++		const stats = unwrap(statsPayload) || {};
++		const settings = unwrap(settingsPayload) || {};
++		const groups = Array.isArray(groupsData) ? groupsData : Array.isArray(groupsData?.items) ? groupsData.items : [];
++		const apiBaseUrl = typeof settings.api_base_url === 'string' && settings.api_base_url.trim() ? settings.api_base_url.trim() : window.location.origin;
++		return {
++			status: 'authenticated',
++			accountLabel: user.username || user.name || user.display_name || user.email,
++			email: user.email,
++			balance: Number(user.balance) || 0,
++			todayUsage: Number(stats.today_actual_cost) || 0,
++			apiBaseUrl,
++			apiKeys: items.filter(item => item?.status === 'active' && typeof item?.key === 'string').map(item => ({
++				id: Number(item.id), name: String(item.name || '未命名 API'), key: item.key.trim(), status: String(item.status || 'active'),
++				groupId: item.group_id == null && item.group?.id == null ? undefined : Number(item.group_id ?? item.group.id), groupName: item.group?.name,
++				platform: item.group?.platform, allowMessagesDispatch: item.group?.allow_messages_dispatch === true,
++			})),
++			groups: groups.filter(group => Number.isFinite(Number(group?.id))).map(group => ({
++				id: Number(group.id), name: String(group.name || '未命名分组'), platform: String(group.platform || ''),
++				description: typeof group.description === 'string' ? group.description : undefined,
++				allowMessagesDispatch: group.allow_messages_dispatch === true,
++			})),
++		};
+ 	} catch (error) { return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' }; }
+ })()`;
+ 
++const LOGOUT_SCRIPT = `(async () => {
++	const storage = window.localStorage;
++	const token = storage.getItem('auth_token');
++	const refreshToken = storage.getItem('refresh_token');
++	try {
++		if (token) { await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ refresh_token: refreshToken }) }); }
++	} catch {}
++	['auth_token', 'refresh_token', 'auth_user', 'token_expires_at', 'pending_auth_session'].forEach(key => storage.removeItem(key));
++	return { status: 'signedOut' };
++})()`;
++
++function updateGroupScript(apiKeyId: number, groupId: number): string {
++	return `(async () => {
++		const token = localStorage.getItem('auth_token');
++		if (!token) { return { status: 'signedOut' }; }
++		try {
++			const response = await fetch('/api/v1/keys/${apiKeyId}', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ group_id: ${groupId} }) });
++			let payload; try { payload = await response.json(); } catch { payload = undefined; }
++			return response.ok && (!payload || typeof payload.code !== 'number' || payload.code === 0) ? { status: 'authenticated' } : { status: 'error', message: payload?.message || '更新 API 分组失败' };
++		} catch (error) { return { status: 'error', message: error instanceof Error ? error.message : '更新 API 分组失败' }; }
++	})()`;
++}
++
+ function loginScript(email: string, password: string): string {
+ 	const credentials = JSON.stringify({ email, password });
+ 	return `(async () => {
+@@ -90,18 +165,44 @@ function parseResult(value: unknown): IGatewayScriptResult | undefined {
+ 		return undefined;
+ 	}
+ 	const result = value as Record<string, unknown>;
+-	if (!['authenticated', 'noKey', 'signedOut', 'twoFactor', 'error'].includes(String(result.status))) {
++	if (!['authenticated', 'signedOut', 'twoFactor', 'error'].includes(String(result.status))) {
+ 		return undefined;
+ 	}
++	const apiKeys = Array.isArray(result.apiKeys) ? result.apiKeys.filter(value => value && typeof value === 'object').map(value => {
++		const key = value as Record<string, unknown>;
++		return {
++			id: Number(key.id), name: typeof key.name === 'string' ? key.name : '未命名 API', key: typeof key.key === 'string' ? key.key : '',
++			maskedKey: maskApiKey(typeof key.key === 'string' ? key.key : ''), status: typeof key.status === 'string' ? key.status : 'active',
++			groupId: key.groupId == null ? undefined : Number(key.groupId), groupName: typeof key.groupName === 'string' ? key.groupName : undefined,
++			platform: typeof key.platform === 'string' ? key.platform : undefined, allowMessagesDispatch: key.allowMessagesDispatch === true,
++		};
++	}).filter(key => Number.isFinite(key.id) && key.key.length > 0) : [];
++	const groups = Array.isArray(result.groups) ? result.groups.filter(value => value && typeof value === 'object').map(value => {
++		const group = value as Record<string, unknown>;
++		return {
++			id: Number(group.id), name: typeof group.name === 'string' ? group.name : '未命名分组', platform: typeof group.platform === 'string' ? group.platform : '',
++			description: typeof group.description === 'string' ? group.description : undefined, allowMessagesDispatch: group.allowMessagesDispatch === true,
++		};
++	}).filter(group => Number.isFinite(group.id)) : [];
+ 	return {
+ 		status: result.status as GatewayStatus,
+-		apiKey: typeof result.apiKey === 'string' ? result.apiKey : undefined,
++		accountLabel: typeof result.accountLabel === 'string' ? result.accountLabel : undefined,
++		email: typeof result.email === 'string' ? result.email : undefined,
++		balance: typeof result.balance === 'number' ? result.balance : undefined,
++		todayUsage: typeof result.todayUsage === 'number' ? result.todayUsage : undefined,
++		apiBaseUrl: typeof result.apiBaseUrl === 'string' ? result.apiBaseUrl : undefined,
++		apiKeys,
++		groups,
+ 		message: typeof result.message === 'string' ? result.message : undefined,
+ 		tempToken: typeof result.tempToken === 'string' ? result.tempToken : undefined,
+ 		userEmailMasked: typeof result.userEmailMasked === 'string' ? result.userEmailMasked : undefined,
+ 	};
+ }
+ 
++function maskApiKey(apiKey: string): string {
++	return apiKey.length > 8 ? `${apiKey.slice(0, 4)}....${apiKey.slice(-4)}` : '********';
++}
++
+ /** Custom Gateway UI backed directly by the main-process BrowserView channel. */
+ export class BoldGatewayController extends Disposable {
+ 
+@@ -113,7 +214,9 @@ export class BoldGatewayController extends Disposable {
+ 	private browserVisible = false;
+ 	private waitingForKey = false;
+ 	private requestInProgress = false;
+-	private importedKey: string | undefined;
++	private cachedResult: IGatewayScriptResult | undefined;
++	private cacheTimestamp = 0;
++	private sessionRequest: Promise<IGatewayScriptResult> | undefined;
+ 	private readonly initialCleanup: Promise<void>;
+ 
+ 	constructor(
+@@ -121,7 +224,8 @@ export class BoldGatewayController extends Disposable {
+ 		private readonly windowId: number,
+ 		private readonly gatewayUrl: string,
+ 		private readonly browserViewService: IBrowserViewService,
+-		private readonly saveApiKey: (baseUrl: string, apiKey: string) => Promise<void>,
++		private readonly saveApiKey: (provider: BoldFrontendProvider, baseUrl: string, apiKey: string) => Promise<void>,
++		private readonly onDidChange: () => void,
+ 	) {
+ 		super();
+ 		this.container = document.createElement('div');
+@@ -167,7 +271,7 @@ export class BoldGatewayController extends Disposable {
+ 		this.container.classList.add('is-open');
+ 		this.container.setAttribute('aria-hidden', 'false');
+ 		this.container.inert = false;
+-		this.renderMessage('正在连接 Sub2API…', '登录后会静默读取可用 API Key，并自动保存到 AI Setting。', true);
++		this.renderMessage('正在连接 Sub2API...', '登录后可在统一设置中为 Claude 和 Codex 分别选择 API。', true);
+ 		try {
+ 			await this.ensureBrowser();
+ 			await this.refreshSession();
+@@ -206,21 +310,85 @@ export class BoldGatewayController extends Disposable {
+ 		});
+ 		this.browserCreated = true;
+ 		this.viewDisposables.add(this.browserViewService.onDynamicDidChangeLoadingState(GATEWAY_VIEW_ID)(event => {
+-			if (!event.loading && this.container.classList.contains('is-open')) {
+-				void this.refreshSession();
++			if (!event.loading) {
++				void this.refreshSession(true);
+ 			}
+ 		}));
+ 		this.viewDisposables.add(this.browserViewService.onDynamicDidNavigate(GATEWAY_VIEW_ID)(() => {
+ 			if (this.waitingForKey) {
+-				void this.refreshSession();
++				void this.refreshSession(true);
+ 			}
+ 		}));
+ 		const poller = mainWindow.setInterval(() => {
+ 			if (this.waitingForKey) {
+-				void this.refreshSession();
++				void this.refreshSession(true);
+ 			}
+ 		}, KEY_POLL_INTERVAL);
+ 		this.viewDisposables.add(toDisposable(() => mainWindow.clearInterval(poller)));
++		const accountPoller = mainWindow.setInterval(() => void this.refreshSession(true), ACCOUNT_CACHE_TTL);
++		this.viewDisposables.add(toDisposable(() => mainWindow.clearInterval(accountPoller)));
++	}
++
++	async getAccount(force = false): Promise<IBoldGatewayAccount> {
++		const result = await this.getSession(force);
++		if (result.status === 'authenticated') {
++			return {
++				status: 'authenticated',
++				accountLabel: result.accountLabel,
++				email: result.email,
++				balance: result.balance,
++				todayUsage: result.todayUsage,
++				apiKeys: (result.apiKeys ?? []).map(({ key: _key, ...apiKey }) => apiKey),
++				groups: result.groups ?? [],
++			};
++		}
++		return {
++			status: result.status === 'signedOut' ? 'signedOut' : 'unavailable',
++			apiKeys: [],
++			groups: [],
++			message: result.message,
++		};
++	}
++
++	async selectApi(provider: BoldFrontendProvider, apiKeyId: number): Promise<void> {
++		const result = await this.getSession(true);
++		const apiKey = result.apiKeys?.find(candidate => candidate.id === apiKeyId);
++		if (result.status !== 'authenticated' || !apiKey?.key) {
++			throw new Error('选择的 Gateway API 不可用');
++		}
++		if (!this.isCompatible(provider, apiKey.platform, apiKey.allowMessagesDispatch)) {
++			throw new Error(`选择的 API 不支持 ${provider === 'claude' ? 'Claude' : 'Codex'}`);
++		}
++		let baseUrl = result.apiBaseUrl ?? new URL(this.gatewayUrl).origin;
++		if (apiKey.platform === 'antigravity') {
++			baseUrl = `${baseUrl.replace(/\/$/, '')}/antigravity`;
++		}
++		await this.saveApiKey(provider, baseUrl, apiKey.key);
++	}
++
++	async updateApiGroup(apiKeyId: number, groupId: number): Promise<void> {
++		const session = await this.getSession(true);
++		if (session.status !== 'authenticated') {
++			throw new Error(session.message ?? 'AI Gateway 登录已失效');
++		}
++		const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, updateGroupScript(apiKeyId, groupId)));
++		if (result?.status !== 'authenticated') {
++			throw new Error(result?.message ?? '更新 API 分组失败');
++		}
++		this.invalidateCache();
++		await this.getSession(true);
++		this.onDidChange();
++	}
++
++	async logout(): Promise<void> {
++		await this.ensureBrowser();
++		await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, LOGOUT_SCRIPT);
++		this.cachedResult = { status: 'signedOut' };
++		this.cacheTimestamp = Date.now();
++		if (this.container.classList.contains('is-open')) {
++			this.renderLogin();
++		}
++		this.onDidChange();
+ 	}
+ 
+ 	private async destroyStaleBrowser(): Promise<void> {
+@@ -234,29 +402,53 @@ export class BoldGatewayController extends Disposable {
+ 		}
+ 	}
+ 
+-	private async refreshSession(): Promise<void> {
+-		if (this.requestInProgress || !this.container.classList.contains('is-open')) {
+-			return;
++	private async getSession(force = false): Promise<IGatewayScriptResult> {
++		if (!force && this.cachedResult && Date.now() - this.cacheTimestamp < ACCOUNT_CACHE_TTL) {
++			return this.cachedResult;
+ 		}
+-		const url = await this.browserViewService.getURL(GATEWAY_VIEW_ID);
+-		if (!this.sameOrigin(url, this.gatewayUrl)) {
++		if (this.sessionRequest) {
++			return this.sessionRequest;
++		}
++		this.sessionRequest = (async () => {
++			try {
++				await this.ensureBrowser();
++				const url = await this.browserViewService.getURL(GATEWAY_VIEW_ID);
++				if (!this.sameOrigin(url, this.gatewayUrl)) {
++					return { status: 'error', message: 'Gateway 页面尚未准备好' };
++				}
++				const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, SESSION_SCRIPT)) ?? { status: 'error', message: 'Gateway 返回了无效数据' } as const;
++				this.cachedResult = result;
++				this.cacheTimestamp = Date.now();
++				return result;
++			} catch (error) {
++				const result = { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' } as const;
++				this.cachedResult = result;
++				this.cacheTimestamp = Date.now();
++				return result;
++			} finally {
++				this.sessionRequest = undefined;
++			}
++		})();
++		return this.sessionRequest;
++	}
++
++	private async refreshSession(force = false): Promise<void> {
++		if (this.requestInProgress) {
+ 			return;
+ 		}
+ 		this.requestInProgress = true;
++		const before = this.sessionFingerprint(this.cachedResult);
+ 		try {
+-			const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, SESSION_SCRIPT));
+-			if (!result || !this.container.classList.contains('is-open')) {
+-				return;
++			const result = await this.getSession(force);
++			if (this.container.classList.contains('is-open')) {
++				switch (result.status) {
++					case 'authenticated': result.apiKeys?.length ? this.renderConnected(result) : this.renderNoKey(); break;
++					case 'signedOut': this.renderLogin(); break;
++					case 'error': this.renderLogin(result.message); break;
++				}
+ 			}
+-			switch (result.status) {
+-				case 'authenticated':
+-					if (result.apiKey) {
+-						await this.importKey(result.apiKey);
+-					}
+-					break;
+-				case 'noKey': this.renderNoKey(); break;
+-				case 'signedOut': this.renderLogin(); break;
+-				case 'error': this.renderLogin(result.message); break;
++			if (before !== this.sessionFingerprint(result)) {
++				this.onDidChange();
+ 			}
+ 		} finally {
+ 			this.requestInProgress = false;
+@@ -266,14 +458,14 @@ export class BoldGatewayController extends Disposable {
+ 	private renderLogin(message?: string): void {
+ 		void this.setBrowserVisible(false);
+ 		this.waitingForKey = false;
+-		const card = this.createCard('登录 AI Gateway', '登录 Sub2API 后会自动读取 API Key。', message);
++		const card = this.createCard('登录 AI Gateway', '登录后可查看账号用量，并为 Claude 与 Codex 分别选择 API。', message);
+ 		const form = this.document.createElement('form');
+ 		const email = this.createInput('email', '邮箱');
+ 		email.autocomplete = 'username';
+ 		const password = this.createInput('password', '密码');
+ 		password.autocomplete = 'current-password';
+ 		const actions = this.createActions();
+-		const submit = this.createButton('登录并导入');
++		const submit = this.createButton('登录');
+ 		submit.type = 'submit';
+ 		const web = this.createButton('使用网页登录', true);
+ 		actions.append(submit, web);
+@@ -282,7 +474,7 @@ export class BoldGatewayController extends Disposable {
+ 			event.preventDefault();
+ 			void this.login(email.value.trim(), password.value);
+ 		});
+-		web.addEventListener('click', () => void this.showPage('/login?redirect=/keys', true));
++		web.addEventListener('click', () => void this.showPage('/login?redirect=/dashboard', true));
+ 		card.append(form);
+ 		this.content.replaceChildren(card);
+ 		mainWindow.setTimeout(() => email.focus(), 0);
+@@ -300,7 +492,8 @@ export class BoldGatewayController extends Disposable {
+ 			return;
+ 		}
+ 		if (result?.status === 'authenticated') {
+-			await this.refreshSession();
++			this.invalidateCache();
++			await this.refreshSession(true);
+ 			return;
+ 		}
+ 		this.renderLogin(result?.message ?? '登录失败，请检查账号和密码。');
+@@ -312,7 +505,7 @@ export class BoldGatewayController extends Disposable {
+ 		const code = this.createInput('text', '六位验证码');
+ 		code.inputMode = 'numeric';
+ 		code.maxLength = 6;
+-		const submit = this.createButton('验证并导入');
++		const submit = this.createButton('验证并登录');
+ 		submit.type = 'submit';
+ 		form.append(code, submit);
+ 		form.addEventListener('submit', event => {
+@@ -320,7 +513,8 @@ export class BoldGatewayController extends Disposable {
+ 			void (async () => {
+ 				const result = parseResult(await this.browserViewService.executeJavaScript(GATEWAY_VIEW_ID, twoFactorScript(tempToken, code.value.trim())));
+ 				if (result?.status === 'authenticated') {
+-					await this.refreshSession();
++					this.invalidateCache();
++					await this.refreshSession(true);
+ 				} else {
+ 					this.renderTwoFactor(tempToken, email, result?.message ?? '验证码错误。');
+ 				}
+@@ -334,33 +528,47 @@ export class BoldGatewayController extends Disposable {
+ 	private renderNoKey(): void {
+ 		void this.setBrowserVisible(false);
+ 		this.waitingForKey = false;
+-		const card = this.createCard('尚未创建 API Key', '账户中没有可用 Key。创建完成后会自动检测并导入。');
++		const card = this.createCard('尚未创建 API Key', '账户中没有可用 Key。创建完成后即可在统一设置中分配给扩展。');
+ 		const actions = this.createActions();
+ 		const create = this.createButton('创建 Key');
+ 		const retry = this.createButton('重新检测', true);
+ 		actions.append(create, retry);
+ 		create.addEventListener('click', () => void this.showPage('/keys', true));
+-		retry.addEventListener('click', () => void this.refreshSession());
++		retry.addEventListener('click', () => void this.refreshSession(true));
+ 		card.append(actions);
+ 		this.content.replaceChildren(card);
+ 	}
+ 
+-	private async importKey(apiKey: string): Promise<void> {
+-		if (apiKey !== this.importedKey) {
+-			await this.saveApiKey(new URL('/v1', this.gatewayUrl).toString().replace(/\/$/, ''), apiKey);
+-			this.importedKey = apiKey;
+-		}
+-		await this.setBrowserVisible(false);
++	private renderConnected(result: IGatewayScriptResult): void {
++		void this.setBrowserVisible(false);
+ 		this.waitingForKey = false;
+-		const suffix = apiKey.length > 8 ? `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}` : '••••••••';
+-		const card = this.createCard('AI Gateway 已连接', 'API 地址和 Key 已自动保存到 AI Setting。');
+-		const key = this.document.createElement('div');
+-		key.className = 'bold-gateway__key';
+-		key.textContent = suffix;
+-		card.append(key);
++		const card = this.createCard('AI Gateway 已登录', `${result.accountLabel ?? result.email ?? '当前账号'} · ${result.apiKeys?.length ?? 0} 个可用 API`);
++		const actions = this.createActions();
++		const manage = this.createButton('管理 API', true);
++		const close = this.createButton('返回统一设置');
++		manage.addEventListener('click', () => void this.showPage('/keys', true));
++		close.addEventListener('click', () => void this.close());
++		actions.append(close, manage);
++		card.append(actions);
+ 		this.content.replaceChildren(card);
+ 	}
+ 
++	private invalidateCache(): void {
++		this.cachedResult = undefined;
++		this.cacheTimestamp = 0;
++	}
++
++	private isCompatible(provider: BoldFrontendProvider, platform: string | undefined, allowMessagesDispatch: boolean): boolean {
++		const resolvedPlatform = platform ?? 'anthropic';
++		return provider === 'codex'
++			? resolvedPlatform === 'openai'
++			: resolvedPlatform === 'anthropic' || resolvedPlatform === 'antigravity' || (resolvedPlatform === 'openai' && allowMessagesDispatch);
++	}
++
++	private sessionFingerprint(result: IGatewayScriptResult | undefined): string {
++		return JSON.stringify(result ? [result.status, result.accountLabel, result.balance, result.todayUsage, result.apiKeys?.map(key => [key.id, key.groupId])] : []);
++	}
++
+ 	private async showPage(path: string, waitForKey: boolean): Promise<void> {
+ 		this.content.replaceChildren();
+ 		this.browserHost.hidden = false;
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index cdf8edd..ca2c99f 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -191,7 +191,7 @@ body.bold-independent-frontend .monaco-workbench {
+ 	transition: opacity 140ms ease;
+ }
+ 
+-body.bold-independent-frontend:not(.ai-hub-agent-mode):not(.ai-hub-edit-chat-mode) .monaco-workbench {
++body.bold-independent-frontend:not(.ai-hub-agent-mode):not(.ai-hub-edit-chat-mode):not(.bold-native-overlay-active) .monaco-workbench {
+ 	visibility: hidden !important;
+ 	opacity: 0 !important;
+ 	pointer-events: none !important;
+@@ -234,6 +234,25 @@ body.bold-independent-frontend .monaco-workbench .monaco-dialog-box {
+ 	pointer-events: none !important;
+ }
+ 
++/* Quick Open and the command palette are invoked by the independent shell. */
++body.bold-independent-frontend .monaco-workbench > .quick-input-widget {
++	display: block !important;
++	visibility: visible !important;
++	opacity: 1 !important;
++	pointer-events: auto !important;
++}
++
++body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench {
++	z-index: 900 !important;
++	visibility: visible !important;
++	opacity: 1 !important;
++}
++
++body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench > .monaco-grid-view {
++	visibility: hidden !important;
++	pointer-events: none !important;
++}
++
+ body.bold-independent-frontend .monaco-workbench .editor-group-watermark-wrapper {
+ 	display: none !important;
+ }
+@@ -376,7 +395,7 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 	top: 10px;
+ 	right: 10px;
+ 	bottom: 10px;
+-	width: min(480px, calc(100vw - 88px));
++	width: min(560px, calc(100vw - 88px));
+ 	overflow: hidden;
+ 	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
+ 	border-radius: 16px;
+@@ -450,6 +469,144 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 	line-height: 1.65;
+ }
+ 
++.bold-frontend__gateway-account,
++.bold-frontend__gateway-groups {
++	margin-bottom: 14px;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
++	border-radius: 8px;
++	background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
++}
++
++.bold-frontend__gateway-account-header {
++	display: flex;
++	align-items: center;
++	justify-content: space-between;
++	gap: 12px;
++	padding: 14px 16px;
++}
++
++.bold-frontend__gateway-identity {
++	display: flex;
++	min-width: 0;
++	align-items: center;
++	gap: 10px;
++}
++
++.bold-frontend__gateway-identity > div {
++	display: grid;
++	min-width: 0;
++	gap: 3px;
++}
++
++.bold-frontend__gateway-identity strong,
++.bold-frontend__gateway-identity span {
++	overflow: hidden;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__gateway-identity span {
++	color: var(--vscode-descriptionForeground);
++	font-size: 10px;
++}
++
++.bold-frontend__gateway-account-actions {
++	display: flex;
++	flex: none;
++	gap: 7px;
++}
++
++.bold-frontend__gateway-account-actions button {
++	min-height: 32px;
++	padding: 0 11px;
++	border: 0;
++	border-radius: 7px;
++	background: var(--vscode-button-background);
++	color: var(--vscode-button-foreground);
++	cursor: pointer;
++	font-size: 10px;
++}
++
++.bold-frontend__gateway-account-actions button.is-secondary {
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
++	background: color-mix(in srgb, var(--vscode-input-background) 92%, transparent);
++	color: var(--vscode-foreground);
++}
++
++.bold-frontend__gateway-account-actions button.is-danger {
++	background: color-mix(in srgb, var(--vscode-errorForeground) 16%, var(--vscode-input-background));
++	color: var(--vscode-errorForeground);
++}
++
++.bold-frontend__gateway-metrics {
++	display: grid;
++	grid-template-columns: repeat(3, minmax(0, 1fr));
++	border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++.bold-frontend__gateway-metrics > div {
++	display: grid;
++	gap: 5px;
++	padding: 13px 16px;
++	border-right: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++.bold-frontend__gateway-metrics > div:last-child {
++	border-right: 0;
++}
++
++.bold-frontend__gateway-metrics span {
++	color: var(--vscode-descriptionForeground);
++	font-size: 9px;
++}
++
++.bold-frontend__gateway-metrics strong {
++	font-size: 15px;
++}
++
++.bold-frontend__gateway-groups > header {
++	display: grid;
++	gap: 4px;
++	padding: 14px 16px 0;
++}
++
++.bold-frontend__gateway-groups > header strong {
++	font-size: 12px;
++}
++
++.bold-frontend__gateway-groups > header span,
++.bold-frontend__settings-muted {
++	color: var(--vscode-descriptionForeground);
++	font-size: 10px;
++}
++
++.bold-frontend__settings-muted {
++	margin: 0;
++	padding: 13px 16px 16px;
++}
++
++.bold-frontend__gateway-group-form {
++	display: grid;
++	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
++	gap: 7px 10px;
++	padding: 14px 16px 16px;
++}
++
++.bold-frontend__gateway-group-field {
++	display: grid;
++	gap: 7px;
++}
++
++.bold-frontend__gateway-group-field label {
++	font-size: 9px;
++	font-weight: 600;
++}
++
++.bold-frontend__gateway-group-form .bold-frontend__provider-actions {
++	grid-column: 1 / -1;
++	margin-top: 4px;
++}
++
+ .bold-frontend__chat-preference {
+ 	display: grid;
+ 	gap: 14px;
+@@ -580,7 +737,9 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 	font-weight: 600;
+ }
+ 
+-.bold-frontend__provider-form input {
++.bold-frontend__provider-form input,
++.bold-frontend__provider-form select,
++.bold-frontend__gateway-group-form select {
+ 	height: 38px;
+ 	box-sizing: border-box;
+ 	margin-bottom: 14px;
+@@ -590,13 +749,40 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 	outline: 0;
+ 	background: var(--vscode-input-background);
+ 	color: var(--vscode-input-foreground);
++	font: inherit;
+ }
+ 
+-.bold-frontend__provider-form input:focus {
++.bold-frontend__provider-form input:focus,
++.bold-frontend__provider-form select:focus,
++.bold-frontend__gateway-group-form select:focus {
+ 	border-color: var(--vscode-focusBorder);
+ 	box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder) 15%, transparent);
+ }
+ 
++.bold-frontend__gateway-group-form select {
++	width: 100%;
++	margin-bottom: 0;
++}
++
++.bold-frontend__provider-form select:disabled {
++	opacity: .55;
++}
++
++.bold-frontend__manual-config {
++	border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
++.bold-frontend__manual-config summary {
++	padding: 11px 16px;
++	color: var(--vscode-descriptionForeground);
++	cursor: pointer;
++	font-size: 10px;
++}
++
++.bold-frontend__manual-config[open] summary {
++	border-bottom: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++}
++
+ .bold-frontend__provider-actions {
+ 	display: flex;
+ 	align-items: center;
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+index 5b0e152..13d99d0 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -60,6 +60,7 @@ export class BoldFrontendApp {
+ 	private stateApplication = 0;
+ 	private switchingMode = false;
+ 	private pendingMode: BoldFrontendMode | undefined;
++	private settingsReturnFocus: HTMLElement | undefined;
+ 
+ 	constructor(
+ 		private readonly document: Document,
+@@ -96,7 +97,7 @@ export class BoldFrontendApp {
+ 
+ 		const railBottom = this.createElement('div', 'bold-frontend__rail-group bold-frontend__rail-group--bottom');
+ 		railBottom.append(
+-			this.createButton({ icon: '◎', label: 'Gateway', title: 'AI Gateway', onClick: () => void this.openGateway() }),
++			this.createButton({ icon: '⇄', label: 'SSH', title: '通过 SSH 连接远程主机', onClick: () => void this.runAction('remoteConnect') }),
+ 			this.createButton({ icon: '⚙', label: '设置', title: 'AI 与应用设置', onClick: () => void this.toggleSettings() }),
+ 		);
+ 		rail.append(railBottom);
+@@ -153,7 +154,7 @@ export class BoldFrontendApp {
+ 		this.settingsDrawer.inert = true;
+ 		const settingsHeader = this.createElement('header', 'bold-frontend__settings-header');
+ 		settingsHeader.append(
+-			this.createElement('strong', undefined, 'AI Setting'),
++			this.createElement('strong', undefined, 'AI & Gateway Setting'),
+ 			this.createButton({ className: 'bold-frontend__settings-close', icon: '×', label: '关闭设置', onClick: () => this.closeSettings() }),
+ 		);
+ 		this.settingsBody = this.createElement('div', 'bold-frontend__settings-body');
+@@ -270,8 +271,10 @@ export class BoldFrontendApp {
+ 			button.classList.toggle('is-active', button.dataset.mode === state.mode);
+ 		}
+ 		this.workspaceTitle.textContent = state.workspaceName;
+-		this.connectionStatus.textContent = state.gatewayConnected ? '● Gateway 已连接' : '○ Gateway 未连接';
+-		this.connectionStatus.classList.toggle('is-connected', state.gatewayConnected);
++		this.connectionStatus.textContent = state.gatewayStatus === 'authenticated'
++			? `$${(state.gatewayBalance ?? 0).toFixed(2)} 剩余  ·  今日 $${(state.gatewayTodayUsage ?? 0).toFixed(2)}`
++			: state.gatewayStatus === 'signedOut' ? 'Gateway 未登录' : 'Gateway 用量暂不可用';
++		this.connectionStatus.classList.toggle('is-connected', state.gatewayStatus === 'authenticated');
+ 		const editChatName = state.editChatProvider === 'claude' ? 'Claude' : 'Codex';
+ 		this.providerStatus.textContent = state.mode === 'edit'
+ 			? `右侧对话 · ${editChatName}`
+@@ -414,10 +417,6 @@ export class BoldFrontendApp {
+ 			this.createUntitledDocument();
+ 			return;
+ 		}
+-		if (action === 'quickOpen' || action === 'commandPalette') {
+-			this.focusExplorer();
+-			return;
+-		}
+ 		await this.bridge.runAction(action);
+ 	}
+ 
+@@ -518,6 +517,7 @@ export class BoldFrontendApp {
+ 			this.closeSettings();
+ 			return;
+ 		}
++		this.settingsReturnFocus = this.document.activeElement instanceof HTMLElement ? this.document.activeElement : undefined;
+ 		this.settingsDrawer.classList.add('is-open');
+ 		this.settingsDrawer.setAttribute('aria-hidden', 'false');
+ 		this.settingsDrawer.inert = false;
+@@ -530,9 +530,11 @@ export class BoldFrontendApp {
+ 	}
+ 
+ 	private closeSettings(): void {
++		this.settingsDrawer.inert = true;
++		this.settingsReturnFocus?.focus();
++		this.settingsReturnFocus = undefined;
+ 		this.settingsDrawer.classList.remove('is-open');
+ 		this.settingsDrawer.setAttribute('aria-hidden', 'true');
+-		this.settingsDrawer.inert = true;
+ 	}
+ 
+ 	private renderSettings(settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): void {
+@@ -540,15 +542,130 @@ export class BoldFrontendApp {
+ 		const intro = this.createElement('section', 'bold-frontend__settings-intro');
+ 		intro.append(
+ 			this.createElement('span', 'bold-frontend__eyebrow', 'AI WORKSPACE'),
+-			this.createElement('h2', undefined, '模型与凭据'),
+-			this.createElement('p', undefined, '选择编辑器右侧常驻的对话扩展，并管理 Claude 与 Codex 的原生配置。留空 API Key 会保留当前凭据。'),
++			this.createElement('h2', undefined, '账号、用量与 API'),
++			this.createElement('p', undefined, '在一处管理 Gateway 账号、API 分组，以及 Claude Code 与 Codex 各自使用的 API。'),
+ 		);
+ 		this.settingsBody.append(intro);
+ 		this.settingsBody.append(
++			this.createGatewayAccountSettings(settings),
++			this.createGatewayGroupSettings(settings),
+ 			this.createEditChatProviderSettings(settings.editChatProvider),
+-			this.createProviderSettings('claude', 'Claude Code', 'CL', settings.claudeBaseUrl, settings.claudeHasApiKey),
+-			this.createProviderSettings('codex', 'Codex', 'CX', settings.codexBaseUrl, settings.codexHasApiKey),
++			this.createProviderSettings('claude', 'Claude Code', 'CL', settings),
++			this.createProviderSettings('codex', 'Codex', 'CX', settings),
++		);
++	}
++
++	private createGatewayAccountSettings(settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): HTMLElement {
++		const gateway = settings.gateway;
++		const section = this.createElement('section', 'bold-frontend__gateway-account');
++		const header = this.createElement('header', 'bold-frontend__gateway-account-header');
++		const identity = this.createElement('div', 'bold-frontend__gateway-identity');
++		identity.append(
++			this.createElement('span', 'bold-frontend__provider-mark', 'AI'),
++			this.createElement('div'),
++		);
++		identity.lastElementChild?.append(
++			this.createElement('strong', undefined, gateway.status === 'authenticated' ? (gateway.accountLabel ?? 'AI Gateway 账号') : 'AI Gateway'),
++			this.createElement('span', undefined, gateway.status === 'authenticated' ? (gateway.email ?? '已登录') : gateway.status === 'signedOut' ? '尚未登录' : (gateway.message ?? '暂时无法连接')),
++		);
++		header.append(identity);
++
++		const actions = this.createElement('div', 'bold-frontend__gateway-account-actions');
++		const refresh = this.createElement('button', 'is-secondary', '刷新');
++		refresh.type = 'button';
++		refresh.title = '刷新账号和用量';
++		refresh.addEventListener('click', () => void this.reloadSettings());
++		actions.append(refresh);
++		if (gateway.status === 'authenticated') {
++			const logout = this.createElement('button', 'is-danger', '退出登录');
++			logout.type = 'button';
++			logout.addEventListener('click', () => {
++				logout.disabled = true;
++				void this.bridge.logoutGateway().then(() => this.reloadSettings(), () => {
++					logout.disabled = false;
++				});
++			});
++			actions.append(logout);
++		} else {
++			const login = this.createElement('button', undefined, '登录');
++			login.type = 'button';
++			login.addEventListener('click', () => void this.openGateway());
++			actions.append(login);
++		}
++		header.append(actions);
++		section.append(header);
++
++		if (gateway.status === 'authenticated') {
++			const metrics = this.createElement('div', 'bold-frontend__gateway-metrics');
++			for (const [label, value] of [
++				['账户剩余', `$${(gateway.balance ?? 0).toFixed(2)}`],
++				['今日用量', `$${(gateway.todayUsage ?? 0).toFixed(2)}`],
++				['可用 API', String(gateway.apiKeys.length)],
++			] as const) {
++				const metric = this.createElement('div');
++				metric.append(this.createElement('span', undefined, label), this.createElement('strong', undefined, value));
++				metrics.append(metric);
++			}
++			section.append(metrics);
++		}
++		return section;
++	}
++
++	private createGatewayGroupSettings(settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): HTMLElement {
++		const section = this.createElement('section', 'bold-frontend__gateway-groups');
++		const heading = this.createElement('header');
++		heading.append(
++			this.createElement('strong', undefined, 'API 分组管理'),
++			this.createElement('span', undefined, '修改 API 所属平台与路由分组。'),
+ 		);
++		section.append(heading);
++		if (settings.gateway.status !== 'authenticated' || !settings.gateway.apiKeys.length) {
++			section.append(this.createElement('p', 'bold-frontend__settings-muted', settings.gateway.status === 'authenticated' ? '当前账号没有可用 API。' : '登录后可调整 API 分组。'));
++			return section;
++		}
++
++		const form = this.createElement('form', 'bold-frontend__gateway-group-form');
++		const apiSelect = this.createSelect('选择 API');
++		for (const api of settings.gateway.apiKeys) {
++			apiSelect.add(new Option(`${api.name} · ${api.maskedKey}`, String(api.id)));
++		}
++		const groupSelect = this.createSelect('选择分组');
++		for (const group of settings.gateway.groups) {
++			groupSelect.add(new Option(`${group.name} · ${this.platformLabel(group.platform)}`, String(group.id)));
++		}
++		const syncGroup = () => {
++			const api = settings.gateway.apiKeys.find(candidate => candidate.id === Number(apiSelect.value));
++			groupSelect.value = api?.groupId == null ? '' : String(api.groupId);
++		};
++		apiSelect.addEventListener('change', syncGroup);
++		syncGroup();
++		const footer = this.createElement('div', 'bold-frontend__provider-actions');
++		const status = this.createElement('span', 'bold-frontend__provider-status');
++		const save = this.createElement('button', 'bold-frontend__provider-save', '更新分组');
++		save.type = 'submit';
++		footer.append(status, save);
++		const apiField = this.createElement('div', 'bold-frontend__gateway-group-field');
++		apiField.append(this.createElement('label', undefined, 'API'), apiSelect);
++		const groupField = this.createElement('div', 'bold-frontend__gateway-group-field');
++		groupField.append(this.createElement('label', undefined, '分组'), groupSelect);
++		form.append(apiField, groupField, footer);
++		form.addEventListener('submit', event => {
++			event.preventDefault();
++			const apiKeyId = Number(apiSelect.value);
++			const groupId = Number(groupSelect.value);
++			if (!Number.isFinite(apiKeyId) || apiKeyId <= 0 || !Number.isFinite(groupId) || groupId <= 0) {
++				status.textContent = '请选择 API 和分组';
++				return;
++			}
++			save.disabled = true;
++			status.textContent = '正在更新...';
++			void this.bridge.updateGatewayApiGroup(apiKeyId, groupId).then(() => this.reloadSettings(), () => {
++				status.textContent = '更新失败';
++				save.disabled = false;
++			});
++		});
++		section.append(form);
++		return section;
+ 	}
+ 
+ 	private createEditChatProviderSettings(selectedProvider: BoldFrontendProvider): HTMLElement {
+@@ -607,7 +724,10 @@ export class BoldFrontendApp {
+ 		return card;
+ 	}
+ 
+-	private createProviderSettings(provider: 'claude' | 'codex', title: string, mark: string, baseUrlValue: string, hasApiKey: boolean): HTMLElement {
++	private createProviderSettings(provider: 'claude' | 'codex', title: string, mark: string, settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): HTMLElement {
++		const baseUrlValue = provider === 'claude' ? settings.claudeBaseUrl : settings.codexBaseUrl;
++		const hasApiKey = provider === 'claude' ? settings.claudeHasApiKey : settings.codexHasApiKey;
++		const selectedApiKeyId = provider === 'claude' ? settings.claudeGatewayApiKeyId : settings.codexGatewayApiKeyId;
+ 		const card = this.createElement('section', 'bold-frontend__provider-card');
+ 		const header = this.createElement('header', 'bold-frontend__provider-header');
+ 		header.append(
+@@ -615,6 +735,44 @@ export class BoldFrontendApp {
+ 			this.createElement('strong', undefined, title),
+ 			hasApiKey ? this.createElement('span', 'bold-frontend__provider-connected', '已连接') : this.createElement('span'),
+ 		);
++		const gatewayForm = this.createElement('form', 'bold-frontend__provider-form');
++		const apiLabel = this.createElement('label', undefined, 'Gateway API');
++		const apiSelect = this.createSelect('选择 Gateway API');
++		const compatibleApis = settings.gateway.apiKeys.filter(api => this.isApiCompatible(provider, api.platform, api.allowMessagesDispatch));
++		for (const api of compatibleApis) {
++			apiSelect.add(new Option(`${api.name} · ${api.groupName ?? this.platformLabel(api.platform)} · ${api.maskedKey}`, String(api.id)));
++		}
++		if (selectedApiKeyId && compatibleApis.some(api => api.id === selectedApiKeyId)) {
++			apiSelect.value = String(selectedApiKeyId);
++		}
++		apiSelect.disabled = settings.gateway.status !== 'authenticated' || compatibleApis.length === 0;
++		const gatewayFooter = this.createElement('div', 'bold-frontend__provider-actions');
++		const gatewayStatus = this.createElement('span', 'bold-frontend__provider-status');
++		gatewayStatus.textContent = settings.gateway.status !== 'authenticated'
++			? '请先登录 Gateway'
++			: compatibleApis.length ? `${compatibleApis.length} 个兼容 API` : '没有兼容 API，请先调整分组';
++		const apply = this.createElement('button', 'bold-frontend__provider-save', '应用 API');
++		apply.type = 'submit';
++		apply.disabled = apiSelect.disabled;
++		gatewayFooter.append(gatewayStatus, apply);
++		gatewayForm.append(apiLabel, apiSelect, gatewayFooter);
++		gatewayForm.addEventListener('submit', event => {
++			event.preventDefault();
++			const apiKeyId = Number(apiSelect.value);
++			if (!Number.isFinite(apiKeyId) || apiKeyId <= 0) {
++				gatewayStatus.textContent = '请选择 API';
++				return;
++			}
++			apply.disabled = true;
++			gatewayStatus.textContent = '正在应用...';
++			void this.bridge.selectGatewayApi(provider, apiKeyId).then(() => this.reloadSettings(), () => {
++				gatewayStatus.textContent = '应用失败';
++				apply.disabled = false;
++			});
++		});
++
++		const manual = this.createElement('details', 'bold-frontend__manual-config');
++		manual.append(this.createElement('summary', undefined, '手动配置 Base URL 与 API Key'));
+ 		const form = this.createElement('form', 'bold-frontend__provider-form');
+ 		const baseUrlLabel = this.createElement('label', undefined, 'Base URL');
+ 		const baseUrl = this.createElement('input');
+@@ -643,10 +801,44 @@ export class BoldFrontendApp {
+ 				status.textContent = '保存失败';
+ 			}).finally(() => submit.disabled = false);
+ 		});
+-		card.append(header, form);
++		manual.append(form);
++		card.append(header, gatewayForm, manual);
+ 		return card;
+ 	}
+ 
++	private createSelect(placeholder: string): HTMLSelectElement {
++		const select = this.createElement('select');
++		select.add(new Option(placeholder, ''));
++		return select;
++	}
++
++	private isApiCompatible(provider: BoldFrontendProvider, platform: string | undefined, allowMessagesDispatch: boolean): boolean {
++		const resolvedPlatform = platform ?? 'anthropic';
++		return provider === 'codex'
++			? resolvedPlatform === 'openai'
++			: resolvedPlatform === 'anthropic' || resolvedPlatform === 'antigravity' || (resolvedPlatform === 'openai' && allowMessagesDispatch);
++	}
++
++	private platformLabel(platform: string | undefined): string {
++		switch (platform) {
++			case 'anthropic': return 'Claude';
++			case 'openai': return 'OpenAI';
++			case 'antigravity': return 'Antigravity';
++			case 'gemini': return 'Gemini';
++			default: return '未分组';
++		}
++	}
++
++	private async reloadSettings(): Promise<void> {
++		this.settingsBody.replaceChildren(this.createElement('div', 'bold-frontend__settings-loading', '正在刷新账号与 API...'));
++		try {
++			this.renderSettings(await this.bridge.getAiSettings());
++			await this.acceptState(await this.bridge.getState());
++		} catch {
++			this.settingsBody.replaceChildren(this.createElement('div', 'bold-frontend__settings-error', '无法刷新账号与 API'));
++		}
++	}
++
+ 	private async switchMode(mode: BoldFrontendMode): Promise<void> {
+ 		if (!this.switchingMode && this.state?.mode === mode) {
+ 			return;
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+index dfc14d8..0b2d4ec 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+@@ -6,7 +6,7 @@
+ export type BoldFrontendMode = 'edit' | 'claudeAgent' | 'codexAgent';
+ export type BoldFrontendProvider = 'claude' | 'codex';
+ 
+-export type BoldFrontendAction = 'commandPalette' | 'newFile' | 'quickOpen' | 'terminal';
++export type BoldFrontendAction = 'commandPalette' | 'newFile' | 'quickOpen' | 'terminal' | 'remoteConnect';
+ 
+ export interface IBoldFrontendFileEntry {
+ 	readonly name: string;
+@@ -28,12 +28,47 @@ export interface IBoldFrontendDocument {
+ 	readonly contents: string;
+ }
+ 
++export type BoldGatewayStatus = 'authenticated' | 'signedOut' | 'unavailable';
++
++export interface IBoldGatewayGroup {
++	readonly id: number;
++	readonly name: string;
++	readonly platform: string;
++	readonly description?: string;
++	readonly allowMessagesDispatch: boolean;
++}
++
++export interface IBoldGatewayApiKey {
++	readonly id: number;
++	readonly name: string;
++	readonly maskedKey: string;
++	readonly status: string;
++	readonly groupId?: number;
++	readonly groupName?: string;
++	readonly platform?: string;
++	readonly allowMessagesDispatch: boolean;
++}
++
++export interface IBoldGatewayAccount {
++	readonly status: BoldGatewayStatus;
++	readonly accountLabel?: string;
++	readonly email?: string;
++	readonly balance?: number;
++	readonly todayUsage?: number;
++	readonly apiKeys: readonly IBoldGatewayApiKey[];
++	readonly groups: readonly IBoldGatewayGroup[];
++	readonly message?: string;
++}
++
+ export interface IBoldFrontendAiSettings {
+ 	readonly claudeBaseUrl: string;
+ 	readonly claudeHasApiKey: boolean;
+ 	readonly codexBaseUrl: string;
+ 	readonly codexHasApiKey: boolean;
+ 	readonly editChatProvider: BoldFrontendProvider;
++	readonly claudeGatewayApiKeyId?: number;
++	readonly codexGatewayApiKeyId?: number;
++	readonly gateway: IBoldGatewayAccount;
+ }
+ 
+ export interface IBoldFrontendState {
+@@ -43,7 +78,9 @@ export interface IBoldFrontendState {
+ 	readonly tabs: readonly IBoldFrontendTab[];
+ 	readonly claudeEnabled: boolean;
+ 	readonly codexEnabled: boolean;
+-	readonly gatewayConnected: boolean;
++	readonly gatewayStatus: BoldGatewayStatus;
++	readonly gatewayBalance?: number;
++	readonly gatewayTodayUsage?: number;
+ 	readonly editChatProvider: BoldFrontendProvider;
+ }
+ 
+@@ -63,6 +100,9 @@ export interface IBoldFrontendBridge {
+ 	setEditChatProvider(provider: BoldFrontendProvider): Promise<void>;
+ 	getAiSettings(): Promise<IBoldFrontendAiSettings>;
+ 	saveAiSettings(provider: 'claude' | 'codex', baseUrl: string, apiKey: string): Promise<void>;
++	selectGatewayApi(provider: BoldFrontendProvider, apiKeyId: number): Promise<void>;
++	updateGatewayApiGroup(apiKeyId: number, groupId: number): Promise<void>;
++	logoutGateway(): Promise<void>;
+ 	openGateway(): Promise<void>;
+ 	openSettings(): Promise<void>;
+ 	subscribe(listener: (state: IBoldFrontendState) => void): () => void;
