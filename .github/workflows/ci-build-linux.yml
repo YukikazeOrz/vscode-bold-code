@@ -116,18 +116,6 @@ jobs:
           vscode_arch: arm64
           npm_arch: arm64
           image: vscodium/vscodium-linux-build-agent:focal-arm64
-        - slug: RISCV64
-          vscode_arch: riscv64
-          npm_arch: riscv64
-          image: vscodium/vscodium-linux-build-agent:focal-riscv64
-        - slug: LOONG64
-          vscode_arch: loong64
-          npm_arch: loong64
-          image: vscodium/vscodium-linux-build-agent:crimson-loong64
-        - slug: PPC64
-          vscode_arch: ppc64le
-          npm_arch: ppc64
-          image: vscodium/vscodium-linux-build-agent:focal-ppc64le
     container:
       image: ${{ matrix.image }}
     env:
@@ -141,6 +129,10 @@ jobs:
       RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
 
     steps:
+      - name: Install git-lfs
+        run: sudo apt-get update -y && sudo apt-get install -y git-lfs
+        if: env.DISABLED != 'yes'
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.GITHUB_BRANCH }}
@@ -212,18 +204,6 @@ jobs:
         - slug: ARM64
           vscode_arch: arm64
           npm_arch: arm64
-        - slug: PPC64
-          vscode_arch: ppc64le
-          npm_arch: ppc64
-        - slug: RISCV64
-          vscode_arch: riscv64
-          npm_arch: riscv64
-        - slug: LOONG64
-          vscode_arch: loong64
-          npm_arch: loong64
-        - slug: S390X
-          vscode_arch: s390x
-          npm_arch: s390x
     env:
       BUILD_SOURCEVERSION: ${{ needs.compile.outputs.BUILD_SOURCEVERSION }}
       DISABLED: ${{ vars[format('DISABLE_{0}_LINUX_REH_{1}', ((github.ref == 'refs/heads/insider' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'insider')) && 'INSIDER' || 'STABLE'), matrix.slug)] }}

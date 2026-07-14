@@ -164,6 +164,10 @@ jobs:
       SHOULD_BUILD: ${{ env.SHOULD_BUILD }}
 
     steps:
+      - name: Install git-lfs
+        run: sudo apt-get update -y && sudo apt-get install -y git-lfs
+        if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.GITHUB_BRANCH }}
