@@ -1,0 +1,1230 @@
+diff --git a/src/vs/code/electron-browser/workbench/workbench.ts b/src/vs/code/electron-browser/workbench/workbench.ts
+index b6074b8c..bb6a5049 100644
+--- a/src/vs/code/electron-browser/workbench/workbench.ts
++++ b/src/vs/code/electron-browser/workbench/workbench.ts
+@@ -54,6 +54,8 @@
+ 				grid-template: "rail explorer topbar" 52px "rail explorer content" 1fr / 68px 264px 1fr;
+ 				overflow: hidden;
+ 				background: #0b0e14;
++				color: #d7dce6;
++				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+ 			}
+ 			.bold-initial-rail {
+ 				grid-area: rail;
+@@ -95,8 +97,8 @@
+ 				display: flex;
+ 				box-sizing: border-box;
+ 				flex-direction: column;
+-				gap: 12px;
+-				padding: 20px 18px;
++				gap: 10px;
++				padding: 12px 12px 10px 16px;
+ 				border-right: 1px solid #20252f;
+ 				background: #11151c;
+ 			}
+@@ -107,7 +109,7 @@
+ 				letter-spacing: .12em;
+ 			}
+ 			.bold-initial-explorer strong {
+-				margin-bottom: 12px;
++				margin-bottom: 6px;
+ 				font-size: 13px;
+ 			}
+ 			.bold-initial-tree-row {
+@@ -120,7 +122,7 @@
+ 				grid-area: topbar;
+ 				display: flex;
+ 				align-items: end;
+-				padding: 0 16px;
++				padding: 0 10px;
+ 				border-bottom: 1px solid #20252f;
+ 				background: #0d1016;
+ 				-webkit-app-region: drag;
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+index f73bf74e..d6bd2742 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+@@ -6,7 +6,7 @@
+ export type BoldFrontendMode = 'edit' | 'claudeAgent' | 'codexAgent';
+ export type BoldFrontendProvider = 'claude' | 'codex';
+ 
+-export type BoldFrontendAction = 'commandPalette' | 'newFile' | 'quickOpen' | 'terminal' | 'remoteConnect';
++export type BoldFrontendAction = 'newFile' | 'terminal';
+ 
+ export interface IBoldFrontendFileEntry {
+ 	readonly name: string;
+@@ -28,6 +28,24 @@ export interface IBoldFrontendDocument {
+ 	readonly contents: string;
+ }
+ 
++export interface IBoldFrontendSearchMatch {
++	readonly line: number;
++	readonly preview: string;
++}
++
++export interface IBoldFrontendSearchResult {
++	readonly uri: string;
++	readonly name: string;
++	readonly path: string;
++	readonly matches: readonly IBoldFrontendSearchMatch[];
++}
++
++export interface IBoldFrontendSSHHost {
++	readonly alias: string;
++	readonly destination?: string;
++	readonly detail?: string;
++}
++
+ export type BoldGatewayStatus = 'authenticated' | 'signedOut' | 'unavailable';
+ 
+ export interface IBoldGatewayGroup {
+@@ -83,6 +101,7 @@ export interface IBoldFrontendState {
+ 	readonly gatewayTodayUsage?: number;
+ 	readonly editChatProvider: BoldFrontendProvider;
+ 	readonly searchActive: boolean;
++	readonly terminalActive: boolean;
+ }
+ 
+ /**
+@@ -92,6 +111,10 @@ export interface IBoldFrontendState {
+ export interface IBoldFrontendBridge {
+ 	getState(): Promise<IBoldFrontendState>;
+ 	listDirectory(uri: string): Promise<readonly IBoldFrontendFileEntry[]>;
++	searchWorkspace(query: string): Promise<readonly IBoldFrontendSearchResult[]>;
++	listSSHHosts(): Promise<readonly IBoldFrontendSSHHost[]>;
++	connectSSHHost(host: string): Promise<void>;
++	openSSHConfig(): Promise<void>;
+ 	openFile(uri: string): Promise<IBoldFrontendDocument>;
+ 	saveFile(uri: string, contents: string): Promise<void>;
+ 	activateTab(id: string): Promise<void>;
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts
+index e37d22a6..f71b9d64 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldTerminalController.ts
+@@ -63,10 +63,14 @@ export class BoldTerminalController extends Disposable {
+ 	}
+ 
+ 	async toggle(): Promise<void> {
+-		if (this.container.classList.contains('is-open')) {
++		if (this.isOpen()) {
+ 			this.hide();
+ 			return;
+ 		}
++		await this.show();
++	}
++
++	async show(): Promise<void> {
+ 		this.container.classList.add('is-open');
+ 		this.container.setAttribute('aria-hidden', 'false');
+ 		this.container.inert = false;
+@@ -75,12 +79,16 @@ export class BoldTerminalController extends Disposable {
+ 		this.terminal?.focus();
+ 	}
+ 
+-	private hide(): void {
++	hide(): void {
+ 		this.container.classList.remove('is-open');
+ 		this.container.setAttribute('aria-hidden', 'true');
+ 		this.container.inert = true;
+ 	}
+ 
++	isOpen(): boolean {
++		return this.container.classList.contains('is-open');
++	}
++
+ 	private ensureStarted(): Promise<void> {
+ 		if (!this.starting) {
+ 			this.starting = this.start();
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+index 1d6f21d3..c2e95dcf 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -15,28 +15,27 @@ import { INativeEnvironmentService } from '../../../../platform/environment/comm
+ import { IFileService } from '../../../../platform/files/common/files.js';
+ import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+-import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
+ import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+ import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+ import { IEditorService } from '../../../services/editor/common/editorService.js';
+-import { IViewsService } from '../../../services/views/common/viewsService.js';
+-import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
++import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendSearchResult, IBoldFrontendSSHHost, IBoldFrontendState, IBoldFrontendTab, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
+ import { IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ import { BoldGatewayController } from './boldGatewayController.js';
+ import { BoldTerminalController } from './boldTerminalController.js';
+ 
+ const FRONTEND_ACTION_COMMANDS: Readonly<Record<BoldFrontendAction, string>> = {
+-	commandPalette: 'workbench.action.showCommands',
+ 	newFile: 'workbench.action.files.newUntitledFile',
+-	quickOpen: 'workbench.action.quickOpen',
+ 	terminal: 'workbench.action.terminal.toggleTerminal',
+-	remoteConnect: 'openremotessh.openEmptyWindow',
+ };
+ 
+ const NATIVE_WELCOME_EDITOR_TYPE_ID = 'workbench.editors.gettingStartedInput';
+-const SEARCH_VIEWLET_ID = 'workbench.view.search';
+ const GATEWAY_API_KEY_STORAGE_PREFIX = 'aiHub.gatewayApiKey.';
++const SEARCH_IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', '.build', 'out', 'dist', 'build', 'VSCode-darwin-arm64', 'VSCode-reh-darwin-arm64', 'VSCode-reh-web-darwin-arm64']);
++const SEARCH_MAX_FILES = 1200;
++const SEARCH_MAX_FILE_BYTES = 512 * 1024;
++const SEARCH_MAX_RESULTS = 80;
++const SEARCH_MAX_MATCHES_PER_FILE = 4;
+ 
+ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
+ 	'.c': 'c', '.cc': 'cpp', '.cpp': 'cpp', '.cs': 'csharp', '.css': 'css', '.go': 'go',
+@@ -51,14 +50,6 @@ interface IEditorReference {
+ 	readonly groupId: number;
+ }
+ 
+-interface ISSHHostPick {
+-	readonly label: string;
+-	readonly description?: string;
+-	readonly detail?: string;
+-	readonly hostAlias?: string;
+-	readonly action?: 'manual' | 'configure';
+-}
+-
+ /** VS Code adapter for the independent frontend protocol. */
+ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFrontendBridge {
+ 
+@@ -81,9 +72,7 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+ 		@IEditorService private readonly editorService: IEditorService,
+ 		@ICommandService private readonly commandService: ICommandService,
+-		@IQuickInputService private readonly quickInputService: IQuickInputService,
+ 		@IStorageService private readonly storageService: IStorageService,
+-		@IViewsService private readonly viewsService: IViewsService,
+ 	) {
+ 		super();
+ 		const browserViewService = ProxyChannel.toService<IBrowserViewService>(mainProcessService.getChannel(ipcBrowserViewChannelName));
+@@ -102,8 +91,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		this._register(this.editorService.onDidActiveEditorChange(() => void this.emitState()));
+ 		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => void this.emitState()));
+ 		this._register(this.workspaceContextService.onDidChangeWorkspaceName(() => void this.emitState()));
+-		this._register(quickInputService.onShow(() => mainWindow.document.body.classList.add('bold-native-overlay-active')));
+-		this._register(quickInputService.onHide(() => mainWindow.document.body.classList.remove('bold-native-overlay-active')));
+ 	}
+ 
+ 	async getState(): Promise<IBoldFrontendState> {
+@@ -135,6 +122,7 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 			gatewayTodayUsage: gateway.todayUsage,
+ 			editChatProvider: aiState.editChatProvider,
+ 			searchActive: this.searchActive,
++			terminalActive: this.terminalController.isOpen(),
+ 		};
+ 	}
+ 
+@@ -149,6 +137,94 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 				: left.directory ? -1 : 1);
+ 	}
+ 
++	async searchWorkspace(query: string): Promise<readonly IBoldFrontendSearchResult[]> {
++		const needle = query.trim().toLowerCase();
++		if (!needle) {
++			return [];
++		}
++		const roots = this.workspaceContextService.getWorkspace().folders;
++		const results: IBoldFrontendSearchResult[] = [];
++		let visitedFiles = 0;
++		const visit = async (resource: URI, root: URI): Promise<void> => {
++			if (results.length >= SEARCH_MAX_RESULTS || visitedFiles >= SEARCH_MAX_FILES) {
++				return;
++			}
++			let stat;
++			try {
++				stat = await this.fileService.resolve(resource, { resolveSingleChildDescendants: false });
++			} catch {
++				return;
++			}
++			if (stat.isDirectory) {
++				if (SEARCH_IGNORED_DIRECTORIES.has(stat.name)) {
++					return;
++				}
++				for (const child of stat.children ?? []) {
++					await visit(child.resource, root);
++					if (results.length >= SEARCH_MAX_RESULTS || visitedFiles >= SEARCH_MAX_FILES) {
++						return;
++					}
++				}
++				return;
++			}
++			visitedFiles++;
++			if ((stat.size ?? 0) > SEARCH_MAX_FILE_BYTES || this.isLikelyBinary(stat.name)) {
++				return;
++			}
++			let contents: string;
++			try {
++				contents = (await this.fileService.readFile(resource)).value.toString();
++			} catch {
++				return;
++			}
++			const matches = [];
++			const lines = contents.split(/\r?\n/);
++			for (let index = 0; index < lines.length && matches.length < SEARCH_MAX_MATCHES_PER_FILE; index++) {
++				const line = lines[index];
++				const matchIndex = line.toLowerCase().indexOf(needle);
++				if (matchIndex === -1) {
++					continue;
++				}
++				const start = Math.max(0, matchIndex - 48);
++				const end = Math.min(line.length, matchIndex + needle.length + 72);
++				matches.push({ line: index + 1, preview: line.slice(start, end).trim() });
++			}
++			if (matches.length) {
++				results.push({
++					uri: resource.toString(),
++					name: basename(resource),
++					path: this.relativeWorkspacePath(root, resource),
++					matches,
++				});
++			}
++		};
++		for (const root of roots) {
++			await visit(root.uri, root.uri);
++		}
++		return results;
++	}
++
++	async listSSHHosts(): Promise<readonly IBoldFrontendSSHHost[]> {
++		return this.readSSHConfigHosts();
++	}
++
++	async connectSSHHost(host: string): Promise<void> {
++		const trimmed = host.trim();
++		if (!trimmed) {
++			throw new Error('SSH 主机不能为空');
++		}
++		this.terminalController.hide();
++		await this.setSearchActive(false);
++		await this.commandService.executeCommand('vscode.newWindow', {
++			remoteAuthority: `ssh-remote+${trimmed}`,
++			reuseWindow: true,
++		});
++	}
++
++	async openSSHConfig(): Promise<void> {
++		await this.commandService.executeCommand('openremotessh.openConfigFile');
++	}
++
+ 	async openFile(uri: string): Promise<IBoldFrontendDocument> {
+ 		const resource = this.validateWorkspaceResource(uri);
+ 		const contents = await this.fileService.readFile(resource);
+@@ -185,46 +261,20 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 
+ 	async runAction(action: BoldFrontendAction): Promise<void> {
+ 		if (action === 'terminal') {
+-			await this.terminalController.toggle();
+-			return;
+-		}
+-		if (action === 'remoteConnect') {
+-			await this.pickSSHHost();
++			await this.modeController.setMode('edit');
++			await this.setSearchActive(false);
++			if (this.terminalController.isOpen()) {
++				this.terminalController.hide();
++			} else {
++				await this.terminalController.show();
++			}
++			await this.emitState();
+ 			return;
+ 		}
+ 		await this.commandService.executeCommand(FRONTEND_ACTION_COMMANDS[action]);
+ 	}
+ 
+-	private async pickSSHHost(): Promise<void> {
+-		const hosts = await this.readSSHConfigHosts();
+-		const picks: ISSHHostPick[] = hosts.map(host => ({
+-			label: `$(remote) ${host.alias}`,
+-			description: host.destination,
+-			detail: host.detail,
+-			hostAlias: host.alias,
+-		}));
+-		picks.push(
+-			{ label: '$(add) 手动输入主机…', action: 'manual' },
+-			{ label: '$(gear) 打开 SSH 配置…', action: 'configure' },
+-		);
+-		const selected = await this.quickInputService.pick(picks, {
+-			placeHolder: hosts.length ? '选择 ~/.ssh/config 中的主机' : '未找到已配置主机',
+-			matchOnDescription: true,
+-			matchOnDetail: true,
+-		});
+-		if (selected?.hostAlias) {
+-			await this.commandService.executeCommand('vscode.newWindow', {
+-				remoteAuthority: `ssh-remote+${selected.hostAlias}`,
+-				reuseWindow: false,
+-			});
+-		} else if (selected?.action === 'configure') {
+-			await this.commandService.executeCommand('openremotessh.openConfigFile');
+-		} else if (selected?.action === 'manual') {
+-			await this.commandService.executeCommand(FRONTEND_ACTION_COMMANDS.remoteConnect);
+-		}
+-	}
+-
+-	private async readSSHConfigHosts(): Promise<readonly { alias: string; destination?: string; detail?: string }[]> {
++	private async readSSHConfigHosts(): Promise<readonly IBoldFrontendSSHHost[]> {
+ 		const config = URI.joinPath(this.environmentService.userHome, '.ssh', 'config');
+ 		let contents: string;
+ 		try {
+@@ -271,17 +321,20 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 	}
+ 
+ 	async toggleSearch(): Promise<void> {
+-		this.searchActive = !this.searchActive;
+-		this.modeController.setEnforcementSuspended(this.searchActive);
+-		mainWindow.document.body.classList.toggle('bold-search-active', this.searchActive);
+-		if (this.searchActive) {
+-			await this.viewsService.openViewContainer(SEARCH_VIEWLET_ID, true);
++		const next = !this.searchActive;
++		if (next) {
++			await this.modeController.setMode('edit');
++			this.terminalController.hide();
+ 		}
++		await this.setSearchActive(next);
+ 		await this.emitState();
+ 	}
+ 
+ 	async setMode(mode: BoldFrontendMode): Promise<void> {
++		this.terminalController.hide();
++		await this.setSearchActive(false);
+ 		await this.modeController.setMode(mode);
++		await this.emitState();
+ 	}
+ 
+ 	async setEditChatProvider(provider: BoldFrontendProvider): Promise<void> {
+@@ -363,6 +416,24 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		return this.gatewayController?.getAccount(force) ?? { status: 'unavailable', apiKeys: [], groups: [], message: 'AI Gateway 未配置' };
+ 	}
+ 
++	private async setSearchActive(active: boolean): Promise<void> {
++		if (this.searchActive === active) {
++			return;
++		}
++		this.searchActive = active;
++		this.modeController.setEnforcementSuspended(active);
++		mainWindow.document.body.classList.toggle('bold-search-active', active);
++	}
++
++	private relativeWorkspacePath(root: URI, resource: URI): string {
++		const rootPath = root.path.endsWith('/') ? root.path : `${root.path}/`;
++		return resource.path.startsWith(rootPath) ? resource.path.slice(rootPath.length) : resource.path;
++	}
++
++	private isLikelyBinary(name: string): boolean {
++		return /\.(png|jpe?g|gif|webp|ico|icns|pdf|zip|gz|tar|dmg|vsix|node|wasm|mp4|mov|mp3|wav)$/i.test(name);
++	}
++
+ 	subscribe(listener: (state: IBoldFrontendState) => void): () => void {
+ 		this.listeners.add(listener);
+ 		return () => this.listeners.delete(listener);
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+index 8ae8e54a..0bf9686c 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -8,7 +8,7 @@ import { URI } from '../../../../base/common/uri.js';
+ import { ICodeEditor } from '../../../../editor/browser/editorBrowser.js';
+ import { IEditorConstructionOptions } from '../../../../editor/browser/config/editorConfiguration.js';
+ import { ITextModel } from '../../../../editor/common/model.js';
+-import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendBridge, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab } from './boldFrontendProtocol.js';
++import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendBridge, IBoldFrontendFileEntry, IBoldFrontendSearchResult, IBoldFrontendSSHHost, IBoldFrontendState, IBoldFrontendTab } from './boldFrontendProtocol.js';
+ 
+ export interface IBoldFrontendEditorRuntime {
+ 	createEditor(host: HTMLElement, options: Readonly<IEditorConstructionOptions>): ICodeEditor;
+@@ -38,9 +38,19 @@ export class BoldFrontendApp {
+ 
+ 	private readonly disposers: Array<() => void> = [];
+ 	private readonly workspaceTree: HTMLElement;
++	private readonly searchPanel: HTMLElement;
++	private readonly searchInput: HTMLInputElement;
++	private readonly searchResults: HTMLElement;
++	private readonly searchSummary: HTMLElement;
++	private readonly sshButton: HTMLElement;
++	private readonly sshPanel: HTMLElement;
++	private readonly sshInput: HTMLInputElement;
++	private readonly sshHosts: HTMLElement;
++	private readonly sshStatus: HTMLElement;
+ 	private readonly tabs: HTMLElement;
+ 	private readonly workspaceTitle: HTMLElement;
+ 	private readonly searchButton: HTMLElement;
++	private readonly terminalButton: HTMLElement;
+ 	private readonly connectionStatus: HTMLElement;
+ 	private readonly providerStatus: HTMLElement;
+ 	private readonly editorHost: HTMLElement;
+@@ -62,6 +72,9 @@ export class BoldFrontendApp {
+ 	private switchingMode = false;
+ 	private pendingMode: BoldFrontendMode | undefined;
+ 	private settingsReturnFocus: HTMLElement | undefined;
++	private searchRequest = 0;
++	private searchTimer: number | undefined;
++	private sshActive = false;
+ 
+ 	constructor(
+ 		private readonly document: Document,
+@@ -81,11 +94,14 @@ export class BoldFrontendApp {
+ 		const railPrimary = this.createElement('div', 'bold-frontend__rail-group');
+ 		const editButton = this.createButton({ className: 'is-active', icon: '▱', label: '文件', title: '工作区文件', onClick: () => void this.openEditMode() });
+ 		editButton.dataset.mode = 'edit';
+-		this.searchButton = this.createButton({ icon: '⌕', label: '搜索', title: '全文本搜索', onClick: () => void this.bridge.toggleSearch() });
++		this.searchButton = this.createButton({ icon: '⌕', label: '搜索', title: '全文本搜索', onClick: () => void this.toggleSearch() });
++		this.searchButton.dataset.surface = 'search';
++		this.terminalButton = this.createButton({ icon: '>_', label: '终端', title: '切换终端', onClick: () => void this.runAction('terminal') });
++		this.terminalButton.dataset.surface = 'terminal';
+ 		railPrimary.append(
+ 			editButton,
+ 			this.searchButton,
+-			this.createButton({ icon: '>_', label: '终端', title: '切换终端', onClick: () => void this.runAction('terminal') }),
++			this.terminalButton,
+ 		);
+ 		rail.append(railPrimary);
+ 
+@@ -98,8 +114,10 @@ export class BoldFrontendApp {
+ 		rail.append(railAgents);
+ 
+ 		const railBottom = this.createElement('div', 'bold-frontend__rail-group bold-frontend__rail-group--bottom');
++		this.sshButton = this.createButton({ icon: '⇄', label: 'SSH', title: '通过 SSH 连接远程主机', onClick: () => void this.toggleSSHPanel() });
++		this.sshButton.dataset.surface = 'ssh';
+ 		railBottom.append(
+-			this.createButton({ icon: '⇄', label: 'SSH', title: '通过 SSH 连接远程主机', onClick: () => void this.runAction('remoteConnect') }),
++			this.sshButton,
+ 			this.createButton({ icon: '⚙', label: '设置', title: 'AI 与应用设置', onClick: () => void this.toggleSettings() }),
+ 		);
+ 		rail.append(railBottom);
+@@ -116,14 +134,56 @@ export class BoldFrontendApp {
+ 		explorerHeader.append(explorerEyebrow, this.workspaceTitle, explorerActions);
+ 		this.workspaceTree = this.createElement('div', 'bold-frontend__tree');
+ 		this.workspaceTree.setAttribute('role', 'tree');
+-		explorer.append(explorerHeader, this.workspaceTree);
++		this.searchPanel = this.createElement('section', 'bold-frontend__native-search');
++		this.searchPanel.hidden = true;
++		const searchForm = this.createElement('form', 'bold-frontend__native-search-form');
++		this.searchInput = this.createElement('input', 'bold-frontend__native-search-input');
++		this.searchInput.type = 'search';
++		this.searchInput.placeholder = '搜索工作区';
++		this.searchInput.autocomplete = 'off';
++		this.searchInput.spellcheck = false;
++		const searchSubmit = this.createElement('button', 'bold-frontend__native-search-submit', '⌕');
++		searchSubmit.type = 'submit';
++		searchSubmit.title = '搜索';
++		searchForm.append(this.searchInput, searchSubmit);
++		this.searchSummary = this.createElement('div', 'bold-frontend__native-search-summary', '输入关键词搜索当前工作区');
++		this.searchResults = this.createElement('div', 'bold-frontend__native-search-results');
++		this.searchPanel.append(searchForm, this.searchSummary, this.searchResults);
++		this.sshPanel = this.createElement('section', 'bold-frontend__native-ssh');
++		this.sshPanel.hidden = true;
++		const sshForm = this.createElement('form', 'bold-frontend__native-ssh-form');
++		this.sshInput = this.createElement('input', 'bold-frontend__native-ssh-input');
++		this.sshInput.placeholder = 'user@hostname[:port] 或 Host 别名';
++		this.sshInput.autocomplete = 'off';
++		this.sshInput.spellcheck = false;
++		const sshSubmit = this.createElement('button', 'bold-frontend__native-ssh-submit', '连接');
++		sshSubmit.type = 'submit';
++		sshForm.append(this.sshInput, sshSubmit);
++		this.sshStatus = this.createElement('div', 'bold-frontend__native-ssh-status', '选择一个 SSH Host，或手动输入连接地址。');
++		this.sshHosts = this.createElement('div', 'bold-frontend__native-ssh-hosts');
++		const sshActions = this.createElement('div', 'bold-frontend__native-ssh-actions');
++		const configureSSH = this.createElement('button', 'bold-frontend__native-ssh-secondary', '打开 SSH 配置');
++		configureSSH.type = 'button';
++		configureSSH.addEventListener('click', () => void this.bridge.openSSHConfig());
++		sshActions.append(configureSSH);
++		this.sshPanel.append(sshForm, this.sshStatus, this.sshHosts, sshActions);
++		explorer.append(explorerHeader, this.workspaceTree, this.searchPanel, this.sshPanel);
++		searchForm.addEventListener('submit', event => {
++			event.preventDefault();
++			void this.runNativeSearch();
++		});
++		this.searchInput.addEventListener('input', () => this.scheduleNativeSearch());
++		sshForm.addEventListener('submit', event => {
++			event.preventDefault();
++			void this.connectSSHHost(this.sshInput.value);
++		});
+ 
+ 		const topbar = this.createElement('header', 'bold-frontend__topbar');
+ 		this.tabs = this.createElement('div', 'bold-frontend__tabs');
+ 		this.tabs.setAttribute('role', 'tablist');
+ 		const topbarActions = this.createElement('div', 'bold-frontend__topbar-actions');
+ 		topbarActions.append(
+-			this.createButton({ className: 'bold-frontend__search-button', icon: '⌕', label: '搜索文件或运行命令', onClick: () => void this.runAction('commandPalette') }),
++			this.createButton({ className: 'bold-frontend__search-button', icon: '⌕', label: '搜索工作区', onClick: () => void this.toggleSearch() }),
+ 			this.createButton({ className: 'bold-frontend__topbar-button', icon: '+', label: '新文件', onClick: () => void this.runAction('newFile') }),
+ 		);
+ 		topbar.append(this.tabs, topbarActions);
+@@ -269,10 +329,28 @@ export class BoldFrontendApp {
+ 		this.state = state;
+ 		this.element.hidden = false;
+ 		this.element.classList.toggle('is-agent-mode', state.mode !== 'edit');
++		if (state.searchActive || state.terminalActive || state.mode !== 'edit') {
++			this.setSSHPanelActive(false, false);
++		}
+ 		for (const button of this.element.querySelectorAll<HTMLElement>('[data-mode]')) {
+-			button.classList.toggle('is-active', button.dataset.mode === state.mode);
++			const active = button.dataset.mode === state.mode && (state.mode !== 'edit' || (!state.searchActive && !state.terminalActive && !this.sshActive));
++			button.classList.toggle('is-active', active);
++			button.setAttribute('aria-pressed', String(active));
+ 		}
+ 		this.searchButton.classList.toggle('is-active', state.searchActive);
++		this.searchButton.setAttribute('aria-pressed', String(state.searchActive));
++		this.terminalButton.classList.toggle('is-active', state.terminalActive);
++		this.terminalButton.setAttribute('aria-pressed', String(state.terminalActive));
++		this.sshButton.classList.toggle('is-active', this.sshActive);
++		this.sshButton.setAttribute('aria-pressed', String(this.sshActive));
++		this.workspaceTree.hidden = state.searchActive || this.sshActive;
++		this.searchPanel.hidden = !state.searchActive;
++		this.sshPanel.hidden = !this.sshActive;
++		if (state.searchActive) {
++			this.document.defaultView?.requestAnimationFrame(() => this.searchInput.focus());
++		} else if (this.sshActive) {
++			this.document.defaultView?.requestAnimationFrame(() => this.sshInput.focus());
++		}
+ 		this.workspaceTitle.textContent = state.workspaceName;
+ 		this.connectionStatus.textContent = state.gatewayStatus === 'authenticated'
+ 			? `$${(state.gatewayBalance ?? 0).toFixed(2)} 剩余  ·  今日 $${(state.gatewayTodayUsage ?? 0).toFixed(2)}`
+@@ -340,8 +418,8 @@ export class BoldFrontendApp {
+ 			const empty = this.createElement('div', 'bold-frontend__empty-state');
+ 			empty.append(
+ 				this.createElement('strong', undefined, '尚未打开文件夹'),
+-				this.createElement('span', undefined, '使用命令面板打开一个项目。'),
+-				this.createButton({ className: 'bold-frontend__empty-action', icon: '⌘', label: '打开命令面板', onClick: () => void this.runAction('commandPalette') }),
++				this.createElement('span', undefined, '打开文件夹后，这里会显示 Bold 自绘的工作区树。'),
++				this.createButton({ className: 'bold-frontend__empty-action', icon: '+', label: '新建草稿', onClick: () => this.createUntitledDocument() }),
+ 			);
+ 			this.workspaceTree.append(empty);
+ 			return;
+@@ -408,19 +486,173 @@ export class BoldFrontendApp {
+ 	}
+ 
+ 	private async openEditMode(): Promise<void> {
+-		if (this.state?.mode !== 'edit') {
+-			await this.switchMode('edit');
++		if (this.state?.mode !== 'edit' || this.state.searchActive || this.state.terminalActive || this.sshActive) {
++			this.setSSHPanelActive(false, false);
++			this.showModeTransition('edit');
++			try {
++				await this.bridge.setMode('edit');
++				await this.acceptState(await this.bridge.getState());
++			} finally {
++				this.hideModeTransition();
++			}
+ 			return;
+ 		}
+ 		this.focusExplorer();
+ 	}
+ 
++	private async toggleSearch(): Promise<void> {
++		this.setSSHPanelActive(false, false);
++		await this.bridge.toggleSearch();
++		await this.acceptState(await this.bridge.getState());
++	}
++
++	private async toggleSSHPanel(): Promise<void> {
++		const next = !this.sshActive;
++		if (next) {
++			if (this.state?.mode !== 'edit' || this.state.searchActive || this.state.terminalActive) {
++				await this.bridge.setMode('edit');
++				await this.acceptState(await this.bridge.getState());
++			}
++			this.setSSHPanelActive(true, true);
++			await this.loadSSHHosts();
++		} else {
++			this.setSSHPanelActive(false, true);
++		}
++	}
++
++	private setSSHPanelActive(active: boolean, focus: boolean): void {
++		this.sshActive = active;
++		this.workspaceTree.hidden = active || this.state?.searchActive === true;
++		this.sshPanel.hidden = !active;
++		this.sshButton.classList.toggle('is-active', active);
++		this.sshButton.setAttribute('aria-pressed', String(active));
++		if (active && focus) {
++			this.document.defaultView?.requestAnimationFrame(() => this.sshInput.focus());
++		}
++	}
++
++	private async loadSSHHosts(): Promise<void> {
++		this.sshStatus.textContent = '正在读取 ~/.ssh/config...';
++		try {
++			const hosts = await this.bridge.listSSHHosts();
++			this.renderSSHHosts(hosts);
++			this.sshStatus.textContent = hosts.length ? `${hosts.length} 个可用 Host` : '没有发现 SSH Host，可以手动输入。';
++		} catch {
++			this.sshHosts.replaceChildren();
++			this.sshStatus.textContent = '读取 SSH 配置失败，可以手动输入。';
++		}
++	}
++
++	private renderSSHHosts(hosts: readonly IBoldFrontendSSHHost[]): void {
++		this.sshHosts.replaceChildren();
++		for (const host of hosts) {
++			const button = this.createElement('button', 'bold-frontend__native-ssh-host');
++			button.type = 'button';
++			button.append(
++				this.createElement('strong', undefined, host.alias),
++				this.createElement('span', undefined, host.detail ?? host.destination ?? '使用 SSH 配置连接'),
++			);
++			button.addEventListener('click', () => {
++				this.sshInput.value = host.alias;
++				void this.connectSSHHost(host.alias);
++			});
++			this.sshHosts.append(button);
++		}
++	}
++
++	private async connectSSHHost(host: string): Promise<void> {
++		const target = host.trim();
++		if (!target) {
++			this.sshStatus.textContent = '请输入 SSH Host。';
++			return;
++		}
++		this.sshPanel.classList.add('is-connecting');
++		this.sshStatus.textContent = `正在连接 ${target}...`;
++		try {
++			await this.bridge.connectSSHHost(target);
++			this.document.defaultView?.setTimeout(() => {
++				if (this.sshActive) {
++					this.sshPanel.classList.remove('is-connecting');
++					this.sshStatus.textContent = `仍在等待 ${target} 响应；如果连接失败，请检查主机名、端口和密钥。`;
++				}
++			}, 12000);
++		} catch {
++			this.sshPanel.classList.remove('is-connecting');
++			this.sshStatus.textContent = `无法连接 ${target}。请检查 SSH 配置。`;
++		}
++	}
++
++	private scheduleNativeSearch(): void {
++		if (this.searchTimer !== undefined) {
++			this.document.defaultView?.clearTimeout(this.searchTimer);
++		}
++		this.searchTimer = this.document.defaultView?.setTimeout(() => {
++			this.searchTimer = undefined;
++			void this.runNativeSearch();
++		}, 160);
++	}
++
++	private async runNativeSearch(): Promise<void> {
++		const query = this.searchInput.value.trim();
++		const request = ++this.searchRequest;
++		if (!query) {
++			this.searchSummary.textContent = '输入关键词搜索当前工作区';
++			this.searchResults.replaceChildren();
++			return;
++		}
++		this.searchSummary.textContent = '正在搜索...';
++		try {
++			const results = await this.bridge.searchWorkspace(query);
++			if (request !== this.searchRequest) {
++				return;
++			}
++			this.renderNativeSearchResults(query, results);
++		} catch {
++			if (request === this.searchRequest) {
++				this.searchSummary.textContent = '搜索失败';
++				this.searchResults.replaceChildren();
++			}
++		}
++	}
++
++	private renderNativeSearchResults(query: string, results: readonly IBoldFrontendSearchResult[]): void {
++		const matchCount = results.reduce((count, result) => count + result.matches.length, 0);
++		this.searchSummary.textContent = results.length
++			? `${results.length} 个文件 · ${matchCount} 处匹配`
++			: `没有找到 “${query}”`;
++		this.searchResults.replaceChildren();
++		for (const result of results) {
++			const item = this.createElement('article', 'bold-frontend__native-search-result');
++			const button = this.createElement('button', 'bold-frontend__native-search-file');
++			button.type = 'button';
++			button.append(
++				this.createElement('strong', undefined, result.name),
++				this.createElement('span', undefined, result.path),
++			);
++			button.addEventListener('click', () => void this.openDocument(result.uri));
++			item.append(button);
++			for (const match of result.matches) {
++				const line = this.createElement('button', 'bold-frontend__native-search-match');
++				line.type = 'button';
++				line.append(
++					this.createElement('span', 'bold-frontend__native-search-line', String(match.line)),
++					this.createElement('span', 'bold-frontend__native-search-preview', match.preview),
++				);
++				line.addEventListener('click', () => void this.openDocument(result.uri));
++				item.append(line);
++			}
++			this.searchResults.append(item);
++		}
++	}
++
+ 	private async runAction(action: BoldFrontendAction): Promise<void> {
+ 		if (action === 'newFile') {
+ 			this.createUntitledDocument();
+ 			return;
+ 		}
++		this.setSSHPanelActive(false, false);
+ 		await this.bridge.runAction(action);
++		await this.acceptState(await this.bridge.getState());
+ 	}
+ 
+ 	private async openDocument(uri: string): Promise<void> {
+@@ -851,10 +1083,11 @@ export class BoldFrontendApp {
+ 	}
+ 
+ 	private async switchMode(mode: BoldFrontendMode): Promise<void> {
+-		if (!this.switchingMode && this.state?.mode === mode) {
++		if (!this.switchingMode && this.state?.mode === mode && !this.state.searchActive && !this.state.terminalActive && !this.sshActive) {
+ 			return;
+ 		}
+ 
++		this.setSSHPanelActive(false, false);
+ 		this.pendingMode = mode;
+ 		if (this.switchingMode) {
+ 			return;
+@@ -864,7 +1097,7 @@ export class BoldFrontendApp {
+ 			while (this.pendingMode) {
+ 				const targetMode = this.pendingMode;
+ 				this.pendingMode = undefined;
+-				if (this.state?.mode === targetMode) {
++				if (this.state?.mode === targetMode && !this.state.searchActive && !this.state.terminalActive && !this.sshActive) {
+ 					continue;
+ 				}
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index 9a304304..79e92a04 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -20,11 +20,11 @@ html.bold-frontend-bootstrapping .monaco-workbench {
+ 	inset: 0;
+ 	display: grid;
+ 	grid-template:
+-		'trail explorer topbar' 52px
++		'trail explorer topbar' var(--bold-topbar-height, 52px)
+ 		'trail explorer content' 1fr /
+-		68px 264px 1fr;
++		var(--bold-rail-width, 68px) var(--bold-explorer-width, 264px) 1fr;
+ 	overflow: hidden;
+-	background: #0b0e14;
++	background: color-mix(in srgb, #11151c 92%, #080b12);
+ 	color: #d7dce6;
+ 	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+ }
+@@ -36,7 +36,7 @@ html.bold-frontend-bootstrapping .monaco-workbench {
+ 	flex-direction: column;
+ 	align-items: center;
+ 	gap: 18px;
+-	padding: 47px 8px 12px;
++	padding: calc(var(--bold-window-controls-height, 35px) + 12px) 8px 12px;
+ 	border-right: 1px solid #20252f;
+ 	background: #0e1219;
+ }
+@@ -73,8 +73,8 @@ html.bold-frontend-bootstrapping .monaco-workbench {
+ 	display: flex;
+ 	box-sizing: border-box;
+ 	flex-direction: column;
+-	gap: 12px;
+-	padding: 20px 18px;
++	gap: 10px;
++	padding: 12px 12px 10px 16px;
+ 	border-right: 1px solid #20252f;
+ 	background: #11151c;
+ }
+@@ -87,7 +87,7 @@ html.bold-frontend-bootstrapping .monaco-workbench {
+ }
+ 
+ .bold-frontend-bootstrap__explorer strong {
+-	margin-bottom: 12px;
++	margin-bottom: 6px;
+ 	font-size: 13px;
+ }
+ 
+@@ -103,7 +103,7 @@ html.bold-frontend-bootstrapping .monaco-workbench {
+ 	grid-area: topbar;
+ 	display: flex;
+ 	align-items: end;
+-	padding: 0 16px;
++	padding: 0 10px;
+ 	border-bottom: 1px solid #20252f;
+ 	background: #0d1016;
+ }
+@@ -191,7 +191,7 @@ body.bold-independent-frontend .monaco-workbench {
+ 	transition: opacity 140ms ease;
+ }
+ 
+-body.bold-independent-frontend:not(.ai-hub-agent-mode):not(.ai-hub-edit-chat-mode):not(.bold-native-overlay-active) .monaco-workbench {
++body.bold-independent-frontend:not(.ai-hub-agent-mode):not(.ai-hub-edit-chat-mode) .monaco-workbench {
+ 	visibility: hidden !important;
+ 	opacity: 0 !important;
+ 	pointer-events: none !important;
+@@ -227,85 +227,15 @@ body.bold-independent-frontend .monaco-workbench > .notifications-toasts,
+ body.bold-independent-frontend .monaco-workbench > .notifications-center,
+ body.bold-independent-frontend .monaco-workbench .part.banner,
+ body.bold-independent-frontend .monaco-workbench .monaco-sash,
++body.bold-independent-frontend .monaco-workbench .quick-input-widget,
+ body.bold-independent-frontend .monaco-workbench .context-view,
+-body.bold-independent-frontend .monaco-workbench .monaco-dialog-box {
+-	display: none !important;
+-	pointer-events: none !important;
+-}
+-
+-/*
+- * Quick Open and the command palette are invoked by the independent shell, on top of
+- * bold-native-overlay-active (see boldFrontendWorkbenchBridge.ts's IQuickInputService
+- * onShow/onHide listeners). Forcing display:block unconditionally here used to fight VS
+- * Code's own show/hide logic: dismissing a picker (e.g. Esc) sets the widget's inline
+- * style back to display:none, but that inline change was overridden right back to
+- * visible, leaving a stale, un-closeable widget on screen whenever the ancestor
+- * .monaco-workbench is otherwise kept visible (edit/agent mode). Only escape the
+- * default-hidden treatment while a picker is genuinely open; let VS Code's own inline
+- * display style govern it otherwise.
+- */
+-body.bold-independent-frontend:not(.bold-native-overlay-active) .monaco-workbench > .quick-input-widget {
++body.bold-independent-frontend .monaco-workbench .monaco-dialog-box,
++body.bold-independent-frontend .monaco-workbench .monaco-dialog-modal-block,
++body.bold-independent-frontend .monaco-workbench .dialog-modal-block {
+ 	display: none !important;
+-}
+-
+-body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench > .quick-input-widget {
+-	visibility: visible !important;
+-	opacity: 1 !important;
+-	pointer-events: auto !important;
+-}
+-
+-body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench {
+-	z-index: 900 !important;
+-	visibility: visible !important;
+-	opacity: 1 !important;
+-}
+-
+-body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench > .monaco-grid-view {
+-	visibility: hidden !important;
+-	pointer-events: none !important;
+-}
+-
+-/* The independent shell owns the editor surface, but Search still uses VS Code's native
+- * sidebar. Reveal only that part while keeping the rest of the native grid inert. */
+-body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench {
+-	z-index: 850 !important;
+-	visibility: visible !important;
+-	opacity: 1 !important;
+-	pointer-events: none !important;
+-	background: transparent !important;
+-}
+-
+-body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench > .monaco-grid-view {
+-	visibility: visible !important;
+-	opacity: 1 !important;
+ 	pointer-events: none !important;
+ }
+ 
+-body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.editor,
+-body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.panel,
+-body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.auxiliarybar {
+-	visibility: hidden !important;
+-	pointer-events: none !important;
+-}
+-
+-body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.sidebar:not(.empty) {
+-	position: fixed !important;
+-	top: 0 !important;
+-	bottom: 0 !important;
+-	left: var(--bold-rail-width) !important;
+-	width: var(--bold-explorer-width) !important;
+-	height: auto !important;
+-	visibility: visible !important;
+-	opacity: 1 !important;
+-	pointer-events: auto !important;
+-	border-right: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent) !important;
+-}
+-
+-body.bold-search-active .bold-frontend__explorer {
+-	visibility: hidden;
+-	pointer-events: none;
+-}
+-
+ body.bold-independent-frontend .monaco-workbench .editor-group-watermark-wrapper {
+ 	display: none !important;
+ }
+@@ -492,6 +422,38 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 	box-sizing: border-box;
+ 	overflow: auto;
+ 	padding: 22px;
++	scrollbar-color: color-mix(in srgb, var(--vscode-foreground) 24%, transparent) transparent;
++	scrollbar-width: thin;
++}
++
++.bold-frontend *::-webkit-scrollbar,
++body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar {
++	width: 9px;
++	height: 9px;
++}
++
++.bold-frontend *::-webkit-scrollbar-track,
++body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-track {
++	background: transparent;
++}
++
++.bold-frontend *::-webkit-scrollbar-thumb,
++body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-thumb {
++	border: 2px solid transparent;
++	border-radius: 999px;
++	background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
++	background-clip: padding-box;
++}
++
++.bold-frontend *::-webkit-scrollbar-thumb:hover,
++body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-thumb:hover {
++	background: color-mix(in srgb, var(--vscode-foreground) 34%, transparent);
++	background-clip: padding-box;
++}
++
++.bold-frontend *::-webkit-scrollbar-corner,
++body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-corner {
++	background: transparent;
+ }
+ 
+ .bold-frontend__settings-loading,
+@@ -1334,6 +1296,7 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	gap: 1px;
+ 	border-radius: 12px;
+ 	color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
++	transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+ }
+ 
+ .bold-frontend__rail .bold-frontend__button:hover,
+@@ -1344,14 +1307,19 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	color: var(--vscode-foreground);
+ }
+ 
++.bold-frontend__rail .bold-frontend__button:hover {
++	transform: translateX(1px);
++}
++
+ .bold-frontend__rail .bold-frontend__button.is-active::before {
+ 	position: absolute;
+-	top: 11px;
+-	bottom: 11px;
++	top: 10px;
++	bottom: 10px;
+ 	left: -8px;
+-	width: 3px;
++	width: 4px;
+ 	border-radius: 0 4px 4px 0;
+ 	background: var(--vscode-focusBorder);
++	box-shadow: 0 0 14px color-mix(in srgb, var(--vscode-focusBorder) 48%, transparent);
+ 	content: '';
+ }
+ 
+@@ -1445,6 +1413,8 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	box-sizing: border-box;
+ 	overflow: auto;
+ 	padding: 8px 7px 16px;
++	scrollbar-color: color-mix(in srgb, var(--vscode-foreground) 24%, transparent) transparent;
++	scrollbar-width: thin;
+ }
+ 
+ .bold-frontend__tree-branch {
+@@ -1525,6 +1495,185 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	font-size: 11px;
+ }
+ 
++.bold-frontend__native-search,
++.bold-frontend__native-ssh {
++	height: calc(100% - 86px - var(--bold-statusbar-height));
++	box-sizing: border-box;
++	overflow: auto;
++	padding: 10px 10px 16px;
++	scrollbar-color: color-mix(in srgb, var(--vscode-foreground) 24%, transparent) transparent;
++	scrollbar-width: thin;
++}
++
++.bold-frontend__native-search-form,
++.bold-frontend__native-ssh-form {
++	display: grid;
++	grid-template-columns: minmax(0, 1fr) auto;
++	gap: 6px;
++}
++
++.bold-frontend__native-search-input,
++.bold-frontend__native-ssh-input {
++	height: 34px;
++	box-sizing: border-box;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
++	border-radius: 9px;
++	outline: 0;
++	background:
++		linear-gradient(135deg, color-mix(in srgb, var(--vscode-focusBorder) 7%, transparent), transparent 58%),
++		color-mix(in srgb, var(--vscode-input-background) 94%, #080b12);
++	color: var(--vscode-input-foreground);
++	font: inherit;
++	font-size: 12px;
++}
++
++.bold-frontend__native-search-input {
++	padding: 0 11px;
++}
++
++.bold-frontend__native-ssh-input {
++	padding: 0 10px;
++}
++
++.bold-frontend__native-search-input:focus,
++.bold-frontend__native-ssh-input:focus {
++	border-color: color-mix(in srgb, var(--vscode-focusBorder) 68%, transparent);
++	box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent);
++}
++
++.bold-frontend__native-search-submit,
++.bold-frontend__native-ssh-submit,
++.bold-frontend__native-ssh-secondary {
++	min-height: 34px;
++	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent);
++	border-radius: 9px;
++	background: color-mix(in srgb, var(--vscode-focusBorder) 14%, var(--vscode-input-background));
++	color: var(--vscode-foreground);
++	cursor: pointer;
++	font: inherit;
++	font-size: 11px;
++}
++
++.bold-frontend__native-search-submit {
++	width: 38px;
++}
++
++.bold-frontend__native-ssh-submit {
++	padding: 0 10px;
++}
++
++.bold-frontend__native-search-summary,
++.bold-frontend__native-ssh-status {
++	padding: 10px 2px 8px;
++	color: var(--vscode-descriptionForeground);
++	font-size: 10px;
++	line-height: 1.5;
++}
++
++.bold-frontend__native-search-results,
++.bold-frontend__native-ssh-hosts {
++	display: grid;
++	gap: 7px;
++}
++
++.bold-frontend__native-search-result,
++.bold-frontend__native-ssh-host {
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
++	border-radius: 9px;
++	background: color-mix(in srgb, var(--vscode-editor-background) 72%, transparent);
++}
++
++.bold-frontend__native-search-file,
++.bold-frontend__native-search-match,
++.bold-frontend__native-ssh-host {
++	width: 100%;
++	box-sizing: border-box;
++	border: 0;
++	background: transparent;
++	color: inherit;
++	cursor: pointer;
++	font: inherit;
++	text-align: left;
++}
++
++.bold-frontend__native-search-file,
++.bold-frontend__native-ssh-host {
++	display: grid;
++	gap: 3px;
++	padding: 9px 10px;
++}
++
++.bold-frontend__native-search-file strong,
++.bold-frontend__native-ssh-host strong {
++	overflow: hidden;
++	font-size: 12px;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__native-search-file span,
++.bold-frontend__native-ssh-host span {
++	overflow: hidden;
++	color: var(--vscode-descriptionForeground);
++	font-size: 10px;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__native-search-match {
++	display: grid;
++	grid-template-columns: 34px minmax(0, 1fr);
++	gap: 8px;
++	padding: 6px 10px 8px;
++	border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
++}
++
++.bold-frontend__native-search-line {
++	color: color-mix(in srgb, var(--vscode-focusBorder) 70%, var(--vscode-descriptionForeground));
++	font-family: var(--vscode-editor-font-family);
++	font-size: 10px;
++	text-align: right;
++}
++
++.bold-frontend__native-search-preview {
++	overflow: hidden;
++	color: color-mix(in srgb, var(--vscode-foreground) 75%, transparent);
++	font-family: var(--vscode-editor-font-family);
++	font-size: 10px;
++	text-overflow: ellipsis;
++	white-space: nowrap;
++}
++
++.bold-frontend__native-search-file:hover,
++.bold-frontend__native-search-match:hover,
++.bold-frontend__native-ssh-host:hover {
++	background: color-mix(in srgb, var(--vscode-focusBorder) 10%, transparent);
++}
++
++.bold-frontend__native-ssh-actions {
++	display: flex;
++	margin-top: 10px;
++}
++
++.bold-frontend__native-ssh-secondary {
++	width: 100%;
++	background: color-mix(in srgb, var(--vscode-input-background) 92%, transparent);
++	color: color-mix(in srgb, var(--vscode-foreground) 78%, transparent);
++}
++
++.bold-frontend__native-ssh.is-connecting .bold-frontend__native-ssh-status::before {
++	display: inline-block;
++	width: 9px;
++	height: 9px;
++	margin-right: 7px;
++	border: 2px solid color-mix(in srgb, var(--vscode-focusBorder) 24%, transparent);
++	border-top-color: var(--vscode-focusBorder);
++	border-radius: 99px;
++	vertical-align: -1px;
++	animation: bold-gateway-spin 800ms linear infinite;
++	content: '';
++}
++
+ .bold-frontend__empty-state {
+ 	display: flex;
+ 	flex-direction: column;
+@@ -1582,6 +1731,7 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	align-items: center;
+ 	gap: 4px;
+ 	overflow: auto hidden;
++	scrollbar-width: none;
+ }
+ 
+ .bold-frontend__tab {
+@@ -1688,6 +1838,10 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 
+ .bold-frontend__search-button {
+ 	min-width: 180px;
++	border-color: color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent);
++	background:
++		linear-gradient(135deg, color-mix(in srgb, var(--vscode-focusBorder) 8%, transparent), transparent 54%),
++		color-mix(in srgb, var(--vscode-input-background) 92%, transparent);
+ }
+ 
+ .bold-frontend__search-button .bold-frontend__button-label,

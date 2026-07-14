@@ -1,0 +1,166 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index 930891b3..fcf531ce 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -207,7 +207,10 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 
+ 	private activateAgentPortal(mode: AiHubAgentMode): boolean {
+ 		const extensionId = this.getAgentExtensionId(mode);
+-		const frame = Array.from(mainWindow.document.querySelectorAll<HTMLIFrameElement>('iframe.webview.ready')).find(candidate => candidate.src.includes(`extensionId=${extensionId}`));
++		// The `ready` class is transient and is often absent when a ViewPane was
++		// created while the factory workbench is invisible. Match the extension
++		// iframe directly and wait for its regular webview element instead.
++		const frame = Array.from(mainWindow.document.querySelectorAll<HTMLIFrameElement>('iframe.webview, iframe[src*="extensionId="]')).find(candidate => candidate.src.includes(`extensionId=${extensionId}`));
+ 		const portal = frame?.parentElement?.parentElement;
+ 		if (!portal) {
+ 			return false;
+@@ -222,8 +225,13 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			}
+ 		}
+ 		portal.style.display = '';
++		portal.style.visibility = 'visible';
+ 		portal.classList.add(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
+ 		portal.dataset.agentMode = mode;
++		for (const element of portal.querySelectorAll<HTMLElement>('*')) {
++			element.style.visibility = 'visible';
++		}
++		mainWindow.requestAnimationFrame(() => mainWindow.dispatchEvent(new Event('resize')));
+ 		return true;
+ 	}
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+index f9b9a7c2..78712d4c 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -19,6 +19,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
+ import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+ import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+ import { IEditorService } from '../../../services/editor/common/editorService.js';
++import { IHostService } from '../../../services/host/browser/host.js';
+ import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendSearchResult, IBoldFrontendSSHHost, IBoldFrontendState, IBoldFrontendTab, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
+ import { IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ import { BoldGatewayController } from './boldGatewayController.js';
+@@ -71,6 +72,7 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		@IMainProcessService mainProcessService: IMainProcessService,
+ 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+ 		@IEditorService private readonly editorService: IEditorService,
++		@IHostService private readonly hostService: IHostService,
+ 		@ICommandService private readonly commandService: ICommandService,
+ 		@IStorageService private readonly storageService: IStorageService,
+ 	) {
+@@ -215,9 +217,11 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		}
+ 		this.terminalController.hide();
+ 		await this.setSearchActive(false);
+-		await this.commandService.executeCommand('vscode.newWindow', {
++		// `vscode.newWindow` is a menu command, not the native window-opening API.
++		// Calling it with an options object silently leaves Remote-SSH unresolved.
++		await this.hostService.openWindow({
+ 			remoteAuthority: `ssh-remote+${trimmed}`,
+-			reuseWindow: true,
++			forceReuseWindow: true,
+ 		});
+ 	}
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+index 41e4e6d7..f08eeaa7 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+@@ -212,6 +212,7 @@ export class BoldGatewayController extends Disposable {
+ 	private readonly viewDisposables = this._register(new DisposableStore());
+ 	private browserCreated = false;
+ 	private browserVisible = false;
++	private managedPageOpen = false;
+ 	private waitingForKey = false;
+ 	private requestInProgress = false;
+ 	private cachedResult: IGatewayScriptResult | undefined;
+@@ -299,6 +300,7 @@ export class BoldGatewayController extends Disposable {
+ 		this.container.setAttribute('aria-hidden', 'true');
+ 		this.container.inert = true;
+ 		this.waitingForKey = false;
++		this.managedPageOpen = false;
+ 		await this.setBrowserVisible(false);
+ 	}
+ 
+@@ -324,12 +326,12 @@ export class BoldGatewayController extends Disposable {
+ 		});
+ 		this.browserCreated = true;
+ 		this.viewDisposables.add(this.browserViewService.onDynamicDidChangeLoadingState(GATEWAY_VIEW_ID)(event => {
+-			if (!event.loading) {
++			if (!event.loading && !this.managedPageOpen) {
+ 				void this.refreshSession(true);
+ 			}
+ 		}));
+ 		this.viewDisposables.add(this.browserViewService.onDynamicDidNavigate(GATEWAY_VIEW_ID)(() => {
+-			if (this.waitingForKey) {
++			if (this.waitingForKey && !this.managedPageOpen) {
+ 				void this.refreshSession(true);
+ 			}
+ 		}));
+@@ -454,7 +456,7 @@ export class BoldGatewayController extends Disposable {
+ 		const before = this.sessionFingerprint(this.cachedResult);
+ 		try {
+ 			const result = await this.getSession(force);
+-			if (this.container.classList.contains('is-open')) {
++			if (this.container.classList.contains('is-open') && !this.managedPageOpen) {
+ 				switch (result.status) {
+ 					case 'authenticated': result.apiKeys?.length ? this.renderConnected(result) : this.renderNoKey(); break;
+ 					case 'signedOut': this.renderLogin(); break;
+@@ -587,6 +589,9 @@ export class BoldGatewayController extends Disposable {
+ 		this.content.replaceChildren();
+ 		this.browserHost.hidden = false;
+ 		this.waitingForKey = waitForKey;
++		// A navigation to /keys previously fired the account refresh callbacks,
++		// which immediately replaced the page with the “logged in” card again.
++		this.managedPageOpen = true;
+ 		await this.browserViewService.loadURL(GATEWAY_VIEW_ID, new URL(path, this.gatewayUrl).toString());
+ 		await this.setBrowserVisible(true);
+ 		await this.browserViewService.focus(GATEWAY_VIEW_ID);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index 21b0b3b9..32e41cd2 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -31,11 +31,14 @@ function installBoldFrontendBootstrap(): HTMLElement {
+ 	const document = mainWindow.document;
+ 	document.documentElement.classList.add(BOLD_FRONTEND_BOOTSTRAP_CLASS);
+ 	document.body.classList.add(BOLD_FRONTEND_ACTIVE_CLASS);
+-	// Replace the early renderer splash with the same persistent shell geometry.
+-	// Keeping both nodes alive caused duplicate frames and a visible startup jump.
+-	document.getElementById('monaco-parts-splash')?.remove();
+-	for (const element of document.querySelectorAll('.initialShellColors')) {
+-		element.remove();
++	// The electron entry point has already painted a Bold-shaped splash before
++	// this contribution is evaluated. Reuse it until the app is hydrated: making
++	// a second bootstrap here was the one-frame startup flash.
++	const earlySplash = document.getElementById('monaco-parts-splash');
++	if (earlySplash) {
++		earlySplash.setAttribute('role', 'progressbar');
++		earlySplash.setAttribute('aria-label', 'Bold Code 正在启动');
++		return earlySplash;
+ 	}
+ 
+ 	const screen = document.createElement('div');
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index c575c68d..c9b295a1 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -214,7 +214,7 @@ body:not(.ai-hub-agent-mode) > .bold-agent-webview-portal {
+ 	display: none !important;
+ }
+ 
+-body.bold-independent-frontend > .bold-agent-webview-portal > div,
++body.bold-independent-frontend > .bold-agent-webview-portal > *,
+ body.bold-independent-frontend > .bold-agent-webview-portal iframe.webview {
+ 	position: absolute !important;
+ 	inset: 0 !important;
+@@ -224,6 +224,10 @@ body.bold-independent-frontend > .bold-agent-webview-portal iframe.webview {
+ 	pointer-events: auto !important;
+ }
+ 
++body.bold-independent-frontend > .bold-agent-webview-portal * {
++	visibility: visible !important;
++}
++
+ .bold-frontend {
+ 	position: fixed;
+ 	z-index: 800;

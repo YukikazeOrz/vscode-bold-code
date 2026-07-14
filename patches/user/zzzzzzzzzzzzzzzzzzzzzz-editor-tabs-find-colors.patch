@@ -1,0 +1,253 @@
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+index d6bd2742..65a5ee6d 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+@@ -117,8 +117,6 @@ export interface IBoldFrontendBridge {
+ 	openSSHConfig(): Promise<void>;
+ 	openFile(uri: string): Promise<IBoldFrontendDocument>;
+ 	saveFile(uri: string, contents: string): Promise<void>;
+-	activateTab(id: string): Promise<void>;
+-	closeTab(id: string): Promise<void>;
+ 	runAction(action: BoldFrontendAction): Promise<void>;
+ 	toggleSearch(): Promise<void>;
+ 	setMode(mode: BoldFrontendMode): Promise<void>;
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+index 78712d4c..7b361f8e 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -17,10 +17,8 @@ import { IMainProcessService } from '../../../../platform/ipc/common/mainProcess
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+ import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+ import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+-import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+-import { IEditorService } from '../../../services/editor/common/editorService.js';
+ import { IHostService } from '../../../services/host/browser/host.js';
+-import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendSearchResult, IBoldFrontendSSHHost, IBoldFrontendState, IBoldFrontendTab, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
++import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendSearchResult, IBoldFrontendSSHHost, IBoldFrontendState, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
+ import { IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+ import { BoldGatewayController } from './boldGatewayController.js';
+ import { BoldTerminalController } from './boldTerminalController.js';
+@@ -30,7 +28,6 @@ const FRONTEND_ACTION_COMMANDS: Readonly<Record<BoldFrontendAction, string>> = {
+ 	terminal: 'workbench.action.terminal.toggleTerminal',
+ };
+ 
+-const NATIVE_WELCOME_EDITOR_TYPE_ID = 'workbench.editors.gettingStartedInput';
+ const GATEWAY_API_KEY_STORAGE_PREFIX = 'aiHub.gatewayApiKey.';
+ const SEARCH_IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', '.build', 'out', 'dist', 'build', 'VSCode-darwin-arm64', 'VSCode-reh-darwin-arm64', 'VSCode-reh-web-darwin-arm64']);
+ const SEARCH_MAX_FILES = 1200;
+@@ -46,18 +43,11 @@ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
+ 	'.yaml': 'yaml', '.yml': 'yaml',
+ };
+ 
+-interface IEditorReference {
+-	readonly editor: NonNullable<ReturnType<IEditorGroupsService['activeGroup']['getEditorByIndex']>>;
+-	readonly groupId: number;
+-}
+-
+ /** VS Code adapter for the independent frontend protocol. */
+ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFrontendBridge {
+ 
+ 	private readonly listeners = new Set<(state: IBoldFrontendState) => void>();
+-	private readonly editorReferences = new Map<string, IEditorReference>();
+ 	private stateRequest = 0;
+-	private editSurfacePrepared = false;
+ 	private searchActive = false;
+ 	private readonly gatewayController: BoldGatewayController | undefined;
+ 	private readonly terminalController: BoldTerminalController;
+@@ -70,8 +60,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		@IFileService private readonly fileService: IFileService,
+ 		@IProductService productService: IProductService,
+ 		@IMainProcessService mainProcessService: IMainProcessService,
+-		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+-		@IEditorService private readonly editorService: IEditorService,
+ 		@IHostService private readonly hostService: IHostService,
+ 		@ICommandService private readonly commandService: ICommandService,
+ 		@IStorageService private readonly storageService: IStorageService,
+@@ -89,8 +77,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 			() => void this.emitState(),
+ 		)) : undefined;
+ 		this.terminalController = this._register(new BoldTerminalController(mainWindow.document, mainProcessService, workspaceContextService, environmentService));
+-		this._register(this.editorService.onDidEditorsChange(() => void this.emitState()));
+-		this._register(this.editorService.onDidActiveEditorChange(() => void this.emitState()));
+ 		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => void this.emitState()));
+ 		this._register(this.workspaceContextService.onDidChangeWorkspaceName(() => void this.emitState()));
+ 	}
+@@ -102,7 +88,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 			this.getGatewayAccount(),
+ 		]);
+ 		const mode = this.modeController.mode;
+-		await this.prepareEditSurface(mode);
+ 		const workspace = this.workspaceContextService.getWorkspace();
+ 		const workspaceRoots = workspace.folders.map(folder => ({
+ 			name: folder.name,
+@@ -116,7 +101,10 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 				? workspace.folders[0].name
+ 				: workspace.folders.length > 1 ? '多根工作区' : '未打开文件夹',
+ 			workspaceRoots,
+-			tabs: this.collectTabs(),
++			// Tabs are owned solely by BoldFrontendApp's in-memory editor models.
++			// Do not mirror native editor groups: doing so lets a click escape to a
++			// VS Code editor window instead of switching the visible Bold tab.
++			tabs: [],
+ 			claudeEnabled: aiState.claudeEnabled,
+ 			codexEnabled: aiState.codexEnabled,
+ 			gatewayStatus: gateway.status,
+@@ -245,24 +233,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		await this.fileService.writeFile(resource, VSBuffer.fromString(contents), { atomic: { postfix: '.bold-tmp' } });
+ 	}
+ 
+-	async activateTab(id: string): Promise<void> {
+-		const reference = this.editorReferences.get(id);
+-		if (!reference?.editor) {
+-			return;
+-		}
+-		const group = this.editorGroupsService.getGroup(reference.groupId);
+-		if (group) {
+-			await group.openEditor(reference.editor);
+-		}
+-	}
+-
+-	async closeTab(id: string): Promise<void> {
+-		const reference = this.editorReferences.get(id);
+-		if (reference?.editor) {
+-			await this.editorService.closeEditor({ editor: reference.editor, groupId: reference.groupId });
+-		}
+-	}
+-
+ 	async runAction(action: BoldFrontendAction): Promise<void> {
+ 		if (action === 'terminal') {
+ 			await this.modeController.setMode('edit');
+@@ -442,41 +412,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		return () => this.listeners.delete(listener);
+ 	}
+ 
+-	private collectTabs(): readonly IBoldFrontendTab[] {
+-		this.editorReferences.clear();
+-		const tabs: IBoldFrontendTab[] = [];
+-		for (const group of this.editorGroupsService.groups) {
+-			group.editors.forEach((editor, index) => {
+-				const id = `${group.id}:${index}:${editor.resource?.toString() ?? editor.typeId}`;
+-				this.editorReferences.set(id, { editor, groupId: group.id });
+-				tabs.push({
+-					id,
+-					label: editor.getName(),
+-					active: group.isActive(editor),
+-					dirty: editor.isDirty(),
+-				});
+-			});
+-		}
+-		return tabs;
+-	}
+-
+-	private async prepareEditSurface(mode: BoldFrontendMode): Promise<void> {
+-		if (mode !== 'edit' || this.editSurfacePrepared) {
+-			return;
+-		}
+-		this.editSurfacePrepared = true;
+-
+-		const nativeWelcomeEditors: IEditorReference[] = [];
+-		for (const group of this.editorGroupsService.groups) {
+-			for (const editor of group.editors) {
+-				if (editor.typeId === NATIVE_WELCOME_EDITOR_TYPE_ID) {
+-					nativeWelcomeEditors.push({ editor, groupId: group.id });
+-				}
+-			}
+-		}
+-		await Promise.all(nativeWelcomeEditors.map(reference => this.editorService.closeEditor(reference)));
+-	}
+-
+ 	private validateWorkspaceResource(value: string): URI {
+ 		const resource = URI.parse(value);
+ 		const isWorkspaceRoot = this.workspaceContextService.getWorkspace().folders.some(folder => folder.uri.toString() === resource.toString());
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index 32e41cd2..4aeb11c5 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -11,6 +11,8 @@ import { CommandsRegistry } from '../../../../platform/commands/common/commands.
+ import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+ import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+ import { CodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/codeEditorWidget.js';
++import { EditorExtensionsRegistry } from '../../../../editor/browser/editorExtensions.js';
++import { FindController } from '../../../../editor/contrib/find/browser/findController.js';
+ import { ILanguageService } from '../../../../editor/common/languages/language.js';
+ import { IModelService } from '../../../../editor/common/services/model.js';
+ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+@@ -123,7 +125,17 @@ class BoldFrontendContribution extends Disposable {
+ 	private async initialize(): Promise<void> {
+ 		const bridge = this._register(this.instantiationService.createInstance(BoldFrontendWorkbenchBridge));
+ 		const app = this._register(new BoldFrontendApp(mainWindow.document, bridge, {
+-			createEditor: (host, options) => this.instantiationService.createInstance(CodeEditorWidget, host, options, getSimpleCodeEditorWidgetOptions()),
++			createEditor: (host, options) => {
++				const simpleOptions = getSimpleCodeEditorWidgetOptions();
++				return this.instantiationService.createInstance(CodeEditorWidget, host, options, {
++					...simpleOptions,
++					// Bold owns the tabs, while the editor keeps standard in-editor Find.
++					contributions: [
++						...(simpleOptions.contributions ?? []),
++						...EditorExtensionsRegistry.getSomeEditorContributions([FindController.ID]),
++					],
++				});
++			},
+ 			createModel: (contents, languageId, uri) => this.modelService.createModel(contents, this.languageService.createById(languageId), uri),
+ 		}));
+ 		activeBoldFrontendApp = app;
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+index 19847203..bb0c2438 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -247,6 +247,10 @@ export class BoldFrontendApp {
+ 				event.preventDefault();
+ 				event.stopPropagation();
+ 				this.createUntitledDocument();
++			} else if (event.key.toLowerCase() === 'f') {
++				event.preventDefault();
++				event.stopPropagation();
++				void this.editor?.getAction('actions.find')?.run();
+ 			}
+ 		};
+ 		this.editorHost.addEventListener('keydown', handleEditorKeyDown, true);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index c9b295a1..6f3d1bc9 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -161,6 +161,13 @@ body.bold-independent-frontend {
+ 	--vscode-descriptionForeground: #7f8999;
+ 	--vscode-sideBar-background: #11151c;
+ 	--vscode-editor-background: #11151b;
++	--vscode-editor-foreground: #d7dce6;
++	--vscode-editor-selectionBackground: #2f72c7aa;
++	--vscode-editor-inactiveSelectionBackground: #31577d99;
++	--vscode-editor-selectionHighlightBackground: #355f9a66;
++	--vscode-editor-findMatchBackground: #d9902d99;
++	--vscode-editor-findMatchHighlightBackground: #d9902d55;
++	--vscode-editorCursor-foreground: #dbe9ff;
+ 	--vscode-editorWidget-background: #151a23;
+ 	--vscode-input-background: #171c25;
+ 	--vscode-input-foreground: #d7dce6;
+@@ -1026,6 +1033,26 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	inset: 0;
+ }
+ 
++/* The Bold editor sits outside the native workbench, so it must inherit these
++ * visual tokens explicitly instead of relying on the hidden workbench root. */
++.bold-frontend__editor .monaco-editor .focused .selected-text,
++.bold-frontend__editor .monaco-editor.focused .selected-text {
++	background-color: var(--vscode-editor-selectionBackground) !important;
++}
++
++.bold-frontend__editor .monaco-editor .selected-text {
++	background-color: var(--vscode-editor-inactiveSelectionBackground) !important;
++}
++
++.bold-frontend__editor .monaco-editor .currentFindMatch,
++.bold-frontend__editor .monaco-editor .findMatch {
++	background-color: var(--vscode-editor-findMatchBackground) !important;
++}
++
++.bold-frontend__editor .monaco-editor .findMatchHighlight {
++	background-color: var(--vscode-editor-findMatchHighlightBackground) !important;
++}
++
+ .bold-frontend__editor[hidden] {
+ 	display: none;
+ }

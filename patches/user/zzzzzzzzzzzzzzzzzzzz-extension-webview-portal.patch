@@ -1,0 +1,309 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index a8e5fb80..930891b3 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -3,16 +3,29 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { RunOnceScheduler, timeout } from '../../../../base/common/async.js';
+ import { Disposable } from '../../../../base/common/lifecycle.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+-import { AI_HUB_AGENT_MODE_CLASS, AiHubMode, AiHubProvider, BOLD_FRONTEND_ACTIVE_CLASS, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
++import { ICommandService } from '../../../../platform/commands/common/commands.js';
++import { ILogService } from '../../../../platform/log/common/log.js';
++import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
++import { IViewsService } from '../../../services/views/common/viewsService.js';
++import { AI_HUB_AGENT_MODE_CLASS, AiHubMode, AiHubProvider, BOLD_FRONTEND_ACTIVE_CLASS, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
++
++const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar-secondary', 'claude-sidebar'];
++const CODEX_AGENT_CONTAINER_IDS = ['codexSecondaryViewContainer', 'codexViewContainer'];
++const CLAUDE_AGENT_VIEW_IDS = ['claudeVSCodeSidebarSecondary', 'claudeVSCodeSidebar'];
++const CODEX_AGENT_VIEW_IDS = ['chatgpt.sidebarSecondaryView', 'chatgpt.sidebarView'];
++const AGENT_SURFACE_RETRY_COUNT = 50;
++const AGENT_SURFACE_RETRY_DELAY = 100;
++const ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS = 'bold-agent-webview-portal';
++
++type AiHubAgentMode = Exclude<AiHubMode, 'edit'>;
+ 
+ /**
+- * Pure Bold shell mode state.
+- *
+- * This controller intentionally does not open VS Code view containers, panels,
+- * command palettes, or extension ViewPanes. Agent surfaces are rendered by the
+- * Bold frontend itself.
++ * Keeps Claude/Codex extensions as the implementation, while moving their
++ * extension-owned webview into the Bold shell. VS Code workbench parts are only
++ * used as an invisible factory for extension webviews.
+  */
+ export class AiHubModeController extends Disposable implements IAiHubModeController {
+ 
+@@ -20,11 +33,19 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 
+ 	private currentMode: AiHubMode = 'edit';
+ 	private editChatProvider: AiHubProvider = 'claude';
++	private surfaceGeneration = 0;
+ 	private initialization: Promise<void> | undefined;
+ 	private modeTransition: Promise<void> = Promise.resolve();
++	private applyingLayout = false;
++	private enforcementSuspended = false;
++	private readonly enforcementScheduler = this._register(new RunOnceScheduler(() => void this.enforceAgentPortal(), 0));
+ 
+ 	constructor(
+ 		@IAiConfigService private readonly aiConfigService: IAiConfigService,
++		@ICommandService private readonly commandService: ICommandService,
++		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
++		@IViewsService private readonly viewsService: IViewsService,
++		@ILogService private readonly logService: ILogService,
+ 	) {
+ 		super();
+ 	}
+@@ -46,6 +67,9 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		this.editChatProvider = state.editChatProvider;
+ 		await this.aiConfigService.setMode(state.mode);
+ 		this.applyShellClasses();
++		if (this.currentMode !== 'edit') {
++			await this.applyAgentPortal(this.currentMode, ++this.surfaceGeneration);
++		}
+ 	}
+ 
+ 	setMode(mode: AiHubMode): Promise<void> {
+@@ -53,11 +77,19 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			await this.initialize();
+ 			if (mode === this.currentMode) {
+ 				this.applyShellClasses();
++				if (mode !== 'edit') {
++					await this.applyAgentPortal(mode, ++this.surfaceGeneration);
++				}
+ 				return;
+ 			}
+ 			this.currentMode = mode;
+ 			await this.aiConfigService.setMode(mode);
+ 			this.applyShellClasses();
++			if (mode === 'edit') {
++				this.clearAgentPortals();
++			} else {
++				await this.applyAgentPortal(mode, ++this.surfaceGeneration);
++			}
+ 		});
+ 		this.modeTransition = transition.then(() => undefined, () => undefined);
+ 		return transition;
+@@ -71,15 +103,148 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 			}
+ 			this.editChatProvider = provider;
+ 			await this.aiConfigService.setEditChatProvider(provider);
+-			this.applyShellClasses();
+ 		});
+ 		this.modeTransition = transition.then(() => undefined, () => undefined);
+ 		return transition;
+ 	}
+ 
+-	setEnforcementSuspended(_suspended: boolean): void {
+-		// Kept as a compatibility no-op for the bridge. There is no native
+-		// workbench layout enforcement left to suspend.
++	setEnforcementSuspended(suspended: boolean): void {
++		this.enforcementSuspended = suspended;
++		if (!suspended && this.currentMode !== 'edit') {
++			this.enforcementScheduler.schedule();
++		}
++	}
++
++	private getAgentContainerIds(mode: AiHubAgentMode): readonly string[] {
++		return mode === 'claudeAgent' ? CLAUDE_AGENT_CONTAINER_IDS : CODEX_AGENT_CONTAINER_IDS;
++	}
++
++	private getAgentViewIds(mode: AiHubAgentMode): readonly string[] {
++		return mode === 'claudeAgent' ? CLAUDE_AGENT_VIEW_IDS : CODEX_AGENT_VIEW_IDS;
++	}
++
++	private getAgentExtensionId(mode: AiHubAgentMode): string {
++		return mode === 'claudeAgent' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
++	}
++
++	private getAgentOpenCommand(mode: AiHubAgentMode): string {
++		return mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar';
++	}
++
++	private async openFirstAvailableViewContainer(containerIds: readonly string[], focus: boolean): Promise<boolean> {
++		for (const id of containerIds) {
++			try {
++				if (await this.viewsService.openViewContainer(id, focus)) {
++					return true;
++				}
++			} catch {
++				// Try the next known extension container id.
++			}
++		}
++		return false;
++	}
++
++	private async openFirstAvailableView(viewIds: readonly string[], focus: boolean): Promise<boolean> {
++		for (const id of viewIds) {
++			try {
++				if (await this.viewsService.openView(id, focus)) {
++					return true;
++				}
++			} catch {
++				// Try the next known extension view id.
++			}
++		}
++		return false;
++	}
++
++	private prepareHiddenWorkbenchFactory(): void {
++		this.layoutService.setPartHidden(true, Parts.ACTIVITYBAR_PART);
++		this.layoutService.setPartHidden(true, Parts.PANEL_PART);
++		this.layoutService.setPartHidden(true, Parts.EDITOR_PART);
++		this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
++		this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
++		this.layoutService.layout();
++	}
++
++	private async applyAgentPortal(mode: AiHubAgentMode, generation: number): Promise<void> {
++		this.applyingLayout = true;
++		try {
++			this.prepareHiddenWorkbenchFactory();
++			let commandOpened = false;
++			for (let attempt = 0; attempt < AGENT_SURFACE_RETRY_COUNT && this.isRequestCurrent(mode, generation); attempt++) {
++				await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), true);
++				await this.openFirstAvailableView(this.getAgentViewIds(mode), true);
++				if (this.activateAgentPortal(mode)) {
++					return;
++				}
++
++				if (!commandOpened) {
++					try {
++						await this.commandService.executeCommand(this.getAgentOpenCommand(mode));
++						commandOpened = true;
++					} catch (error) {
++						if (attempt === AGENT_SURFACE_RETRY_COUNT - 1) {
++							this.logService.warn('[aiHub] failed to open agent extension webview command', error);
++						}
++					}
++				}
++
++				await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), true);
++				await this.openFirstAvailableView(this.getAgentViewIds(mode), true);
++				if (this.activateAgentPortal(mode)) {
++					return;
++				}
++				await timeout(AGENT_SURFACE_RETRY_DELAY);
++			}
++		} finally {
++			this.applyingLayout = false;
++		}
++	}
++
++	private isRequestCurrent(mode: AiHubAgentMode, generation: number): boolean {
++		return generation === this.surfaceGeneration && mode === this.currentMode;
++	}
++
++	private activateAgentPortal(mode: AiHubAgentMode): boolean {
++		const extensionId = this.getAgentExtensionId(mode);
++		const frame = Array.from(mainWindow.document.querySelectorAll<HTMLIFrameElement>('iframe.webview.ready')).find(candidate => candidate.src.includes(`extensionId=${extensionId}`));
++		const portal = frame?.parentElement?.parentElement;
++		if (!portal) {
++			return false;
++		}
++		if (portal.parentElement !== mainWindow.document.body) {
++			mainWindow.document.body.appendChild(portal);
++		}
++		for (const activePortal of mainWindow.document.querySelectorAll<HTMLElement>(`.${ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS}`)) {
++			if (activePortal !== portal) {
++				activePortal.classList.remove(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
++				activePortal.style.display = 'none';
++			}
++		}
++		portal.style.display = '';
++		portal.classList.add(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
++		portal.dataset.agentMode = mode;
++		return true;
++	}
++
++	private clearAgentPortals(): void {
++		for (const portal of mainWindow.document.querySelectorAll<HTMLElement>(`.${ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS}`)) {
++			portal.classList.remove(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
++			portal.style.display = 'none';
++		}
++	}
++
++	private async enforceAgentPortal(): Promise<void> {
++		if (this.enforcementSuspended || this.applyingLayout || this.currentMode === 'edit') {
++			return;
++		}
++		try {
++			if (!this.activateAgentPortal(this.currentMode)) {
++				await this.applyAgentPortal(this.currentMode, ++this.surfaceGeneration);
++			}
++		} catch (error) {
++			this.logService.warn('[aiHub] failed to restore agent extension portal', error);
++		}
+ 	}
+ 
+ 	private applyShellClasses(): void {
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index 06656fb7..c575c68d 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -191,6 +191,39 @@ body.bold-independent-frontend .monaco-workbench {
+ 	transition: opacity 140ms ease;
+ }
+ 
++body.bold-independent-frontend > .bold-agent-webview-portal {
++	position: fixed !important;
++	z-index: 950 !important;
++	top: var(--bold-topbar-height) !important;
++	right: 10px !important;
++	bottom: calc(var(--bold-statusbar-height) + 8px) !important;
++	left: var(--bold-shell-left) !important;
++	width: auto !important;
++	height: auto !important;
++	overflow: hidden !important;
++	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
++	border-radius: 12px;
++	background: var(--vscode-editor-background, #11151b);
++	box-shadow: 0 16px 48px rgb(0 0 0 / 22%);
++	clip: auto !important;
++	visibility: visible !important;
++	pointer-events: auto !important;
++}
++
++body:not(.ai-hub-agent-mode) > .bold-agent-webview-portal {
++	display: none !important;
++}
++
++body.bold-independent-frontend > .bold-agent-webview-portal > div,
++body.bold-independent-frontend > .bold-agent-webview-portal iframe.webview {
++	position: absolute !important;
++	inset: 0 !important;
++	width: 100% !important;
++	height: 100% !important;
++	visibility: visible !important;
++	pointer-events: auto !important;
++}
++
+ .bold-frontend {
+ 	position: fixed;
+ 	z-index: 800;
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+index 3d8daa5f..19847203 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -210,7 +210,7 @@ export class BoldFrontendApp {
+ 			this.createElement('span', 'bold-frontend__editor-mark', 'AI'),
+ 		);
+ 		this.agentTitle = this.createElement('strong', undefined, 'Bold Agent');
+-		this.agentDetail = this.createElement('span', undefined, '原生 Agent 宿主已接管，不再加载 VS Code 原生视图。');
++		this.agentDetail = this.createElement('span', undefined, '正在把扩展显示接入 Bold 原生宿主…');
+ 		this.agentSurface.append(this.agentTitle, this.agentDetail);
+ 		this.transitionOverlay = this.createElement('section', 'bold-frontend__transition');
+ 		this.transitionOverlay.hidden = true;
+@@ -437,7 +437,7 @@ export class BoldFrontendApp {
+ 		const enabled = state.mode === 'claudeAgent' ? state.claudeEnabled : state.codexEnabled;
+ 		this.agentTitle.textContent = `${agentName} · Bold Native Host`;
+ 		this.agentDetail.textContent = enabled
+-			? 'VS Code 原生视图已在代码层面切断。这里是 Bold 自绘 Agent 宿主，后续接入原生 Agent 会话 UI。'
++			? '正在加载扩展 webview。功能仍由扩展提供，显示区域由 Bold 接管。'
+ 			: `${agentName} 当前未启用，请先在设置中配置。`;
+ 	}
+ 

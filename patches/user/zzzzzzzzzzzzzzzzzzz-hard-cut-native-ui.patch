@@ -1,0 +1,2618 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts
+deleted file mode 100644
+index befff600..00000000
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiGatewayViewPane.ts
++++ /dev/null
+@@ -1,59 +0,0 @@
+-/*---------------------------------------------------------------------------------------------
+- *  Copyright (c) Microsoft Corporation. All rights reserved.
+- *  Licensed under the MIT License. See License.txt in the project root for license information.
+- *--------------------------------------------------------------------------------------------*/
+-
+-import { ViewPane, IViewPaneOptions } from '../../../browser/parts/views/viewPane.js';
+-import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+-import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+-import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+-import { IViewDescriptorService } from '../../../common/views.js';
+-import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+-import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+-import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+-import { IHoverService } from '../../../../platform/hover/browser/hover.js';
+-import { IAccessibleViewInformationService } from '../../../services/accessibility/common/accessibleViewInformationService.js';
+-import { IProductService } from '../../../../platform/product/common/productService.js';
+-import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+-import { openAiGateway } from './aiGatewayWebview.js';
+-import { IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
+-import { IEditorService } from '../../../services/editor/common/editorService.js';
+-
+-/**
+- * Same "redirect, don't render" trick as AiHubViewPane: clicking this activity bar icon opens
+- * the AI Gateway in an integrated browser editor tab and collapses the sidebar back down.
+- */
+-export class AiGatewayViewPane extends ViewPane {
+-
+-	constructor(
+-		options: IViewPaneOptions,
+-		@IKeybindingService keybindingService: IKeybindingService,
+-		@IContextMenuService contextMenuService: IContextMenuService,
+-		@IConfigurationService configurationService: IConfigurationService,
+-		@IContextKeyService contextKeyService: IContextKeyService,
+-		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
+-		@IInstantiationService instantiationService: IInstantiationService,
+-		@IOpenerService openerService: IOpenerService,
+-		@IThemeService themeService: IThemeService,
+-		@IHoverService hoverService: IHoverService,
+-		@IProductService private readonly productService: IProductService,
+-		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+-		@IBrowserViewWorkbenchService private readonly browserViewService: IBrowserViewWorkbenchService,
+-		@IEditorService private readonly editorService: IEditorService,
+-		accessibleViewInformationService?: IAccessibleViewInformationService,
+-	) {
+-		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService, accessibleViewInformationService);
+-	}
+-
+-	override focus(): void {
+-		super.focus();
+-		this.redirectToGateway();
+-	}
+-
+-	private redirectToGateway(): void {
+-		void openAiGateway(this.browserViewService, this.editorService, this.productService.aiGatewayUrl ?? '');
+-		// Defer so we don't fight the composite bar's own reveal-sidebar handling for this click.
+-		queueMicrotask(() => this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART));
+-	}
+-}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+index d15a6b63..21b0b3b9 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHub.contribution.ts
+@@ -3,14 +3,11 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
+-import { localize2 } from '../../../../nls.js';
+ import './media/boldFrontend.css';
+ import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+ import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+ import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
+-import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
+-import { Codicon } from '../../../../base/common/codicons.js';
+ import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
+ import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+ import { CodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/codeEditorWidget.js';
+@@ -18,8 +15,6 @@ import { ILanguageService } from '../../../../editor/common/languages/language.j
+ import { IModelService } from '../../../../editor/common/services/model.js';
+ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+ import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
+-import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
+-import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { BoldFrontendApp } from '../frontend/boldFrontendApp.js';
+ import { AiConfigService } from './aiConfigService.js';
+@@ -109,7 +104,6 @@ class BoldFrontendContribution extends Disposable {
+ 		@IInstantiationService private readonly instantiationService: IInstantiationService,
+ 		@IAiHubModeController private readonly modeController: IAiHubModeController,
+ 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+-		@IThemeService private readonly themeService: IThemeService,
+ 		@ILogService private readonly logService: ILogService,
+ 		@IModelService private readonly modelService: IModelService,
+ 		@ILanguageService private readonly languageService: ILanguageService,
+@@ -136,8 +130,6 @@ class BoldFrontendContribution extends Disposable {
+ 				activeBoldFrontendApp = undefined;
+ 			}
+ 		}));
+-		this.applyThemeVariables();
+-		this._register(this.themeService.onDidColorThemeChange(() => this.applyThemeVariables()));
+ 		await this.modeController.initialize();
+ 		await app.start();
+ 		this.layoutService.layout();
+@@ -147,60 +139,12 @@ class BoldFrontendContribution extends Disposable {
+ 		boldFrontendBootstrap.remove();
+ 		mainWindow.document.documentElement.classList.remove(BOLD_FRONTEND_BOOTSTRAP_CLASS);
+ 	}
+-
+-	private applyThemeVariables(): void {
+-		const workbench = mainWindow.document.querySelector<HTMLElement>('.monaco-workbench');
+-		if (!workbench) {
+-			return;
+-		}
+-		const source = mainWindow.getComputedStyle(workbench);
+-		for (let index = 0; index < source.length; index++) {
+-			const property = source.item(index);
+-			if (property.startsWith('--vscode-')) {
+-				mainWindow.document.body.style.setProperty(property, source.getPropertyValue(property));
+-			}
+-		}
+-	}
+ }
+ 
+ registerSingleton(IAiConfigService, AiConfigService, InstantiationType.Delayed);
+ registerSingleton(IAiExtensionHostEnvironmentContributor, AiConfigService, InstantiationType.Delayed);
+ registerSingleton(IAiHubModeController, AiHubModeController, InstantiationType.Delayed);
+ 
+-MenuRegistry.appendMenuItem(MenuId.TitleBar, {
+-	command: {
+-		id: AI_HUB_OPEN_COMMAND_ID,
+-		title: localize2('aiHub.topBarOpenSettings', "Open AI Settings"),
+-		icon: Codicon.settingsGear,
+-	},
+-	group: TitleBarLeadingActionsGroup,
+-	order: -100,
+-});
+-
+-MenuRegistry.appendMenuItem(MenuId.TitleBar, {
+-	command: {
+-		id: AI_GATEWAY_OPEN_COMMAND_ID,
+-		title: localize2('aiHub.topBarOpenGateway', "Open AI Gateway"),
+-		icon: Codicon.globe,
+-	},
+-	group: TitleBarLeadingActionsGroup,
+-	order: -99,
+-});
+-
+-MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
+-	command: {
+-		id: AI_HUB_OPEN_COMMAND_ID,
+-		title: localize2('aiHub.commandPaletteOpenSettings', "Open AI Settings"),
+-	},
+-});
+-
+-MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
+-	command: {
+-		id: AI_GATEWAY_OPEN_COMMAND_ID,
+-		title: localize2('aiHub.commandPaletteOpenGateway', "Open AI Gateway"),
+-	},
+-});
+-
+ CommandsRegistry.registerCommand(AI_GATEWAY_OPEN_COMMAND_ID, () => {
+ 	return activeBoldFrontendApp?.openGateway();
+ });
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
+deleted file mode 100644
+index e2003c6d..00000000
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubDrawerService.ts
++++ /dev/null
+@@ -1,1351 +0,0 @@
+-/*---------------------------------------------------------------------------------------------
+- *  Copyright (c) Microsoft Corporation. All rights reserved.
+- *  Licensed under the MIT License. See License.txt in the project root for license information.
+- *--------------------------------------------------------------------------------------------*/
+-
+-import './media/aiHubDrawer.css';
+-import { $, addDisposableListener, EventType } from '../../../../base/browser/dom.js';
+-import { getZoomFactor } from '../../../../base/browser/browser.js';
+-import { mainWindow } from '../../../../base/browser/window.js';
+-import { isCancellationError } from '../../../../base/common/errors.js';
+-import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+-import { localize } from '../../../../nls.js';
+-import { ICommandService } from '../../../../platform/commands/common/commands.js';
+-import { ILogService } from '../../../../platform/log/common/log.js';
+-import { INotificationService } from '../../../../platform/notification/common/notification.js';
+-import { IProductService } from '../../../../platform/product/common/productService.js';
+-import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+-import { IBrowserViewModel, IBrowserViewWorkbenchService } from '../../browserView/common/browserView.js';
+-import { AiHubMode, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubDrawerService, IAiHubModeController } from './aiHubTypes.js';
+-
+-type AiHubDrawerKind = 'settings' | 'gateway';
+-type Sub2ApiSessionStatus = 'authenticated' | 'noKey' | 'signedOut' | 'twoFactor' | 'error';
+-
+-interface ISub2ApiScriptResult {
+-	readonly status: Sub2ApiSessionStatus;
+-	readonly apiKey?: string;
+-	readonly message?: string;
+-	readonly tempToken?: string;
+-	readonly userEmailMasked?: string;
+-}
+-
+-const DRAWER_TRANSITION_MS = 220;
+-const SUB2API_IMPORT_POLL_MS = 2000;
+-const AI_GATEWAY_IMPORT_CALLBACK_URL = 'vscode://ai-gateway/import';
+-const API_KEY_PARAM_NAMES = ['api_key', 'apiKey', 'openai_api_key', 'OPENAI_API_KEY'];
+-const IMPORT_ONLY_KEY_PARAM_NAMES = ['key', 'token', 'access_token'];
+-const BASE_URL_PARAM_NAMES = ['base_url', 'baseUrl', 'openai_base_url', 'OPENAI_BASE_URL'];
+-const SUB2API_SESSION_SCRIPT = `(async () => {
+-	const storage = window.localStorage;
+-	const clearAuth = () => {
+-		storage.removeItem('auth_token');
+-		storage.removeItem('refresh_token');
+-		storage.removeItem('auth_user');
+-		storage.removeItem('token_expires_at');
+-	};
+-	const unwrap = payload => payload && typeof payload.code === 'number'
+-		? (payload.code === 0 ? payload.data : undefined)
+-		: payload;
+-	const readPayload = async response => {
+-		try { return await response.json(); } catch { return undefined; }
+-	};
+-	const requestKeys = token => window.fetch('/api/v1/keys?page=1&page_size=100&status=active&sort_by=created_at&sort_order=desc', {
+-		credentials: 'include',
+-		headers: { Authorization: 'Bearer ' + token }
+-	});
+-
+-	try {
+-		let authToken = storage.getItem('auth_token');
+-		if (!authToken) {
+-			return { status: 'signedOut' };
+-		}
+-
+-		let response = await requestKeys(authToken);
+-		if (response.status === 401) {
+-			const refreshToken = storage.getItem('refresh_token');
+-			if (!refreshToken) {
+-				clearAuth();
+-				return { status: 'signedOut' };
+-			}
+-			const refreshResponse = await window.fetch('/api/v1/auth/refresh', {
+-				method: 'POST',
+-				credentials: 'include',
+-				headers: { 'Content-Type': 'application/json' },
+-				body: JSON.stringify({ refresh_token: refreshToken })
+-			});
+-			const refreshPayload = await readPayload(refreshResponse);
+-			const refreshed = unwrap(refreshPayload);
+-			if (!refreshResponse.ok || typeof refreshed?.access_token !== 'string') {
+-				clearAuth();
+-				return { status: 'signedOut' };
+-			}
+-			authToken = refreshed.access_token;
+-			storage.setItem('auth_token', authToken);
+-			if (typeof refreshed.refresh_token === 'string') {
+-				storage.setItem('refresh_token', refreshed.refresh_token);
+-			}
+-			if (typeof refreshed.expires_in === 'number') {
+-				storage.setItem('token_expires_at', String(Date.now() + refreshed.expires_in * 1000));
+-			}
+-			response = await requestKeys(authToken);
+-		}
+-
+-		const payload = await readPayload(response);
+-		if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) {
+-			return { status: response.status === 401 ? 'signedOut' : 'error', message: payload?.message || '读取 API Key 失败' };
+-		}
+-		const data = unwrap(payload);
+-		const items = Array.isArray(data?.items) ? data.items : [];
+-		const item = items.find(candidate => candidate?.status === 'active' && typeof candidate?.key === 'string' && candidate.key.trim().length >= 8);
+-		return item ? { status: 'authenticated', apiKey: item.key.trim() } : { status: 'noKey' };
+-	} catch (error) {
+-		return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' };
+-	}
+-})()`;
+-
+-function buildSub2ApiLoginScript(email: string, password: string): string {
+-	const credentials = JSON.stringify({ email, password });
+-	return `(async () => {
+-		try {
+-			const response = await window.fetch('/api/v1/auth/login', {
+-				method: 'POST',
+-				credentials: 'include',
+-				headers: { 'Content-Type': 'application/json' },
+-				body: JSON.stringify(${credentials})
+-			});
+-			let payload;
+-			try { payload = await response.json(); } catch { payload = undefined; }
+-			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) {
+-				return { status: 'error', message: payload?.message || '登录失败' };
+-			}
+-			const data = payload && typeof payload.code === 'number' ? payload.data : payload;
+-			if (data?.requires_2fa === true && typeof data.temp_token === 'string') {
+-				return { status: 'twoFactor', tempToken: data.temp_token, userEmailMasked: data.user_email_masked };
+-			}
+-			if (typeof data?.access_token !== 'string') {
+-				return { status: 'error', message: '登录响应中没有访问令牌' };
+-			}
+-			window.localStorage.setItem('auth_token', data.access_token);
+-			if (typeof data.refresh_token === 'string') {
+-				window.localStorage.setItem('refresh_token', data.refresh_token);
+-			}
+-			if (typeof data.expires_in === 'number') {
+-				window.localStorage.setItem('token_expires_at', String(Date.now() + data.expires_in * 1000));
+-			}
+-			if (data.user) {
+-				window.localStorage.setItem('auth_user', JSON.stringify(data.user));
+-			}
+-			return { status: 'authenticated' };
+-		} catch (error) {
+-			return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' };
+-		}
+-	})()`;
+-}
+-
+-function buildSub2ApiTwoFactorScript(tempToken: string, totpCode: string): string {
+-	const request = JSON.stringify({ temp_token: tempToken, totp_code: totpCode });
+-	return `(async () => {
+-		try {
+-			const response = await window.fetch('/api/v1/auth/login/2fa', {
+-				method: 'POST',
+-				credentials: 'include',
+-				headers: { 'Content-Type': 'application/json' },
+-				body: JSON.stringify(${request})
+-			});
+-			let payload;
+-			try { payload = await response.json(); } catch { payload = undefined; }
+-			if (!response.ok || (payload && typeof payload.code === 'number' && payload.code !== 0)) {
+-				return { status: 'error', message: payload?.message || '验证码错误' };
+-			}
+-			const data = payload && typeof payload.code === 'number' ? payload.data : payload;
+-			if (typeof data?.access_token !== 'string') {
+-				return { status: 'error', message: '登录响应中没有访问令牌' };
+-			}
+-			window.localStorage.setItem('auth_token', data.access_token);
+-			if (typeof data.refresh_token === 'string') {
+-				window.localStorage.setItem('refresh_token', data.refresh_token);
+-			}
+-			if (typeof data.expires_in === 'number') {
+-				window.localStorage.setItem('token_expires_at', String(Date.now() + data.expires_in * 1000));
+-			}
+-			if (data.user) {
+-				window.localStorage.setItem('auth_user', JSON.stringify(data.user));
+-			}
+-			return { status: 'authenticated' };
+-		} catch (error) {
+-			return { status: 'error', message: error instanceof Error ? error.message : '无法连接 AI Gateway' };
+-		}
+-	})()`;
+-}
+-
+-function parseSub2ApiScriptResult(value: unknown): ISub2ApiScriptResult | undefined {
+-	if (!value || typeof value !== 'object') {
+-		return undefined;
+-	}
+-	const candidate = value as Record<string, unknown>;
+-	if (candidate.status !== 'authenticated' && candidate.status !== 'noKey' && candidate.status !== 'signedOut' && candidate.status !== 'twoFactor' && candidate.status !== 'error') {
+-		return undefined;
+-	}
+-	return {
+-		status: candidate.status,
+-		apiKey: typeof candidate.apiKey === 'string' && candidate.apiKey.trim().length >= 8 ? candidate.apiKey.trim() : undefined,
+-		message: typeof candidate.message === 'string' ? candidate.message : undefined,
+-		tempToken: typeof candidate.tempToken === 'string' ? candidate.tempToken : undefined,
+-		userEmailMasked: typeof candidate.userEmailMasked === 'string' ? candidate.userEmailMasked : undefined,
+-	};
+-}
+-
+-function parseAiHubMode(value: unknown): AiHubMode {
+-	return value === 'claudeAgent' || value === 'codexAgent' ? value : 'edit';
+-}
+-
+-function appendGatewayImportParameters(gatewayUrl: string): string {
+-	try {
+-		const url = new URL(gatewayUrl);
+-		url.searchParams.set('ai_hub_import', '1');
+-		url.searchParams.set('vscode_import_callback', AI_GATEWAY_IMPORT_CALLBACK_URL);
+-		url.searchParams.set('import_callback', AI_GATEWAY_IMPORT_CALLBACK_URL);
+-		return url.toString();
+-	} catch {
+-		return gatewayUrl;
+-	}
+-}
+-
+-function getHashParams(url: URL): URLSearchParams {
+-	const hash = url.hash.replace(/^#/, '');
+-	if (!hash) {
+-		return new URLSearchParams();
+-	}
+-
+-	const queryStart = hash.indexOf('?');
+-	return new URLSearchParams(queryStart >= 0 ? hash.slice(queryStart + 1) : hash);
+-}
+-
+-function getFirstParam(searchParams: readonly URLSearchParams[], names: readonly string[]): string | undefined {
+-	for (const params of searchParams) {
+-		for (const name of names) {
+-			const value = params.get(name)?.trim();
+-			if (value) {
+-				return value;
+-			}
+-		}
+-	}
+-	return undefined;
+-}
+-
+-function inferGatewayApiBaseUrl(gatewayUrl: string): string {
+-	try {
+-		return new URL('/v1', gatewayUrl).toString().replace(/\/$/, '');
+-	} catch {
+-		return '';
+-	}
+-}
+-
+-function hasSameOrigin(url: string, expectedUrl: string): boolean {
+-	try {
+-		return new URL(url).origin === new URL(expectedUrl).origin;
+-	} catch {
+-		return false;
+-	}
+-}
+-
+-function parseGatewayImportedKey(navigatedUrl: string, gatewayUrl: string): { apiKey: string; baseUrl: string } | undefined {
+-	let url: URL;
+-	try {
+-		url = new URL(navigatedUrl);
+-	} catch {
+-		return undefined;
+-	}
+-
+-	const params = [url.searchParams, getHashParams(url)];
+-	const importRoute = `${url.host}${url.pathname}`.toLowerCase().includes('ai-gateway/import')
+-		|| url.searchParams.get('ai_hub_import') === '1'
+-		|| url.searchParams.get('import_api_key') === '1';
+-	const apiKey = getFirstParam(params, API_KEY_PARAM_NAMES)
+-		?? (importRoute ? getFirstParam(params, IMPORT_ONLY_KEY_PARAM_NAMES) : undefined);
+-	if (!apiKey || apiKey.length < 8) {
+-		return undefined;
+-	}
+-
+-	return {
+-		apiKey,
+-		baseUrl: getFirstParam(params, BASE_URL_PARAM_NAMES) ?? inferGatewayApiBaseUrl(gatewayUrl),
+-	};
+-}
+-
+-export class AiHubDrawerService extends Disposable implements IAiHubDrawerService {
+-
+-	declare readonly _serviceBrand: undefined;
+-
+-	private readonly container: HTMLElement;
+-	private readonly titleElement: HTMLElement;
+-	private readonly settingsHost: HTMLElement;
+-	private readonly settingsRoot: ShadowRoot;
+-	private readonly gatewayHost: HTMLElement;
+-	private readonly gatewayRoot: ShadowRoot;
+-	private readonly settingsDomDisposables = this._register(new DisposableStore());
+-	private readonly gatewayDomDisposables = this._register(new DisposableStore());
+-	private readonly gatewayDisposables = this._register(new DisposableStore());
+-	private gatewayModel: IBrowserViewModel | undefined;
+-	private gatewayBrowserVisible = false;
+-	private gatewayWaitingForKey = false;
+-	private activeDrawer: AiHubDrawerKind | undefined;
+-	private lastImportedGatewayUrl: string | undefined;
+-	private lastImportedApiKey: string | undefined;
+-	private gatewayImportInProgress = false;
+-	private gatewayApiKeyImported = false;
+-	private operationId = 0;
+-
+-	constructor(
+-		@IBrowserViewWorkbenchService private readonly browserViewService: IBrowserViewWorkbenchService,
+-		@IProductService private readonly productService: IProductService,
+-		@IAiConfigService private readonly aiConfigService: IAiConfigService,
+-		@IAiHubModeController private readonly modeController: IAiHubModeController,
+-		@ICommandService private readonly commandService: ICommandService,
+-		@INotificationService private readonly notificationService: INotificationService,
+-		@ILogService private readonly logService: ILogService,
+-		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+-	) {
+-		super();
+-
+-		this.container = $('.ai-hub-drawer');
+-		this.container.setAttribute('role', 'dialog');
+-		this.container.setAttribute('aria-modal', 'false');
+-		this.container.setAttribute('aria-hidden', 'true');
+-
+-		const header = $('.ai-hub-drawer-header');
+-		this.titleElement = $('.ai-hub-drawer-title');
+-		header.appendChild(this.titleElement);
+-
+-		const closeButton = $('button.ai-hub-drawer-close.codicon.codicon-close') as HTMLButtonElement;
+-		closeButton.type = 'button';
+-		closeButton.title = localize('aiHub.drawer.close', "Close");
+-		closeButton.setAttribute('aria-label', localize('aiHub.drawer.close', "Close"));
+-		header.appendChild(closeButton);
+-		this.container.appendChild(header);
+-
+-		const body = $('.ai-hub-drawer-body');
+-		this.settingsHost = $('.ai-hub-drawer-content.ai-hub-drawer-settings');
+-		this.settingsRoot = this.settingsHost.attachShadow({ mode: 'open' });
+-		this.gatewayHost = $('.ai-hub-drawer-content.ai-hub-drawer-gateway');
+-		this.gatewayRoot = this.gatewayHost.attachShadow({ mode: 'open' });
+-		body.append(this.settingsHost, this.gatewayHost);
+-		this.container.appendChild(body);
+-
+-		const workbenchContainer = this.layoutService.getContainer(mainWindow);
+-		workbenchContainer.appendChild(this.container);
+-		this._register(toDisposable(() => this.container.remove()));
+-
+-		this._register(addDisposableListener(closeButton, EventType.CLICK, () => void this.close()));
+-		this._register(addDisposableListener(mainWindow, EventType.KEY_DOWN, event => {
+-			if (event.key === 'Escape' && this.activeDrawer) {
+-				void this.close();
+-			}
+-		}, true));
+-		this._register(this.layoutService.onDidLayoutMainContainer(() => this.layoutDrawer()));
+-
+-		const resizeObserver = new mainWindow.ResizeObserver(() => {
+-			this.layoutDrawer();
+-			if (this.activeDrawer === 'gateway') {
+-				void this.layoutGateway();
+-			}
+-		});
+-		resizeObserver.observe(this.container);
+-		this._register(toDisposable(() => resizeObserver.disconnect()));
+-
+-		this.layoutDrawer();
+-	}
+-
+-	async toggleSettings(): Promise<void> {
+-		if (this.activeDrawer === 'settings') {
+-			await this.close();
+-			return;
+-		}
+-
+-		await this.refreshSettings();
+-		await this.show('settings');
+-	}
+-
+-	async toggleGateway(): Promise<void> {
+-		if (this.activeDrawer === 'gateway') {
+-			await this.close();
+-			return;
+-		}
+-
+-		if (!this.productService.aiGatewayUrl) {
+-			this.notificationService.warn(localize('aiHub.gatewayUrlMissing', "AI Gateway URL is not configured."));
+-			return;
+-		}
+-
+-		await this.show('gateway');
+-	}
+-
+-	async close(): Promise<void> {
+-		if (!this.activeDrawer) {
+-			return;
+-		}
+-
+-		const operationId = ++this.operationId;
+-		await this.hideActiveContent();
+-		this.activeDrawer = undefined;
+-		this.container.classList.remove('ai-hub-drawer-open');
+-		this.container.setAttribute('aria-hidden', 'true');
+-
+-		await this.waitForTransition();
+-		if (operationId === this.operationId && !this.activeDrawer) {
+-			this.container.classList.remove('ai-hub-drawer-visible');
+-		}
+-	}
+-
+-	private async show(kind: AiHubDrawerKind): Promise<void> {
+-		const operationId = ++this.operationId;
+-		const wasOpen = !!this.activeDrawer;
+-		await this.hideActiveContent();
+-		if (operationId !== this.operationId) {
+-			return;
+-		}
+-
+-		this.activeDrawer = kind;
+-		this.titleElement.textContent = kind === 'settings'
+-			? localize('aiHub.title', "AI Settings")
+-			: localize('aiHub.gatewayTitle', "AI Gateway");
+-		this.settingsHost.classList.toggle('active', kind === 'settings');
+-		this.gatewayHost.classList.toggle('active', kind === 'gateway');
+-		this.container.classList.add('ai-hub-drawer-visible');
+-		this.container.setAttribute('aria-hidden', 'false');
+-		this.layoutDrawer();
+-
+-		if (!wasOpen) {
+-			this.container.getBoundingClientRect();
+-			this.container.classList.add('ai-hub-drawer-open');
+-			await this.waitForTransition();
+-		}
+-		if (operationId !== this.operationId || this.activeDrawer !== kind) {
+-			return;
+-		}
+-
+-		if (kind === 'settings') {
+-			return;
+-		}
+-
+-		await this.showGateway(operationId);
+-	}
+-
+-	private async hideActiveContent(): Promise<void> {
+-		if (this.activeDrawer === 'settings') {
+-			this.settingsDomDisposables.clear();
+-			this.settingsRoot.replaceChildren();
+-		}
+-		if (this.activeDrawer === 'gateway') {
+-			this.gatewayDomDisposables.clear();
+-			this.gatewayRoot.replaceChildren();
+-			this.gatewayDisposables.clear();
+-			this.gatewayBrowserVisible = false;
+-			this.gatewayWaitingForKey = false;
+-			if (this.gatewayModel) {
+-				await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway drawer', error));
+-			}
+-		}
+-	}
+-
+-	private async showGateway(operationId: number): Promise<void> {
+-		const gatewayUrl = appendGatewayImportParameters(this.productService.aiGatewayUrl ?? '');
+-		const input = this.browserViewService.getOrCreateLazy('ai-gateway-drawer', {
+-			url: gatewayUrl,
+-			title: localize('aiHub.gatewayTitle', "AI Gateway"),
+-		});
+-		if (input.url !== gatewayUrl) {
+-			input.navigate(gatewayUrl);
+-		}
+-
+-		const model = await input.resolve();
+-		if (operationId !== this.operationId || this.activeDrawer !== 'gateway') {
+-			await model.setVisible(false);
+-			return;
+-		}
+-
+-		this.gatewayModel = model;
+-		this.gatewayBrowserVisible = false;
+-		this.gatewayWaitingForKey = false;
+-		this.hookGatewayImport(model, gatewayUrl);
+-		await model.setVisible(false);
+-		this.renderGatewayLoading(localize('aiHub.gatewayCheckingSession', "正在检查登录状态..."));
+-		if (!model.loading) {
+-			await this.refreshSub2ApiSession(model, gatewayUrl);
+-		}
+-	}
+-
+-	private hookGatewayImport(model: IBrowserViewModel, gatewayUrl: string): void {
+-		this.gatewayDisposables.clear();
+-		this.gatewayApiKeyImported = false;
+-		this.gatewayDisposables.add(model.onDidNavigate(event => {
+-			void this.importGatewayApiKey(event.url, gatewayUrl);
+-			if (this.gatewayWaitingForKey) {
+-				void this.refreshSub2ApiSession(model, gatewayUrl);
+-			}
+-		}));
+-		this.gatewayDisposables.add(model.onDidChangeLoadingState(event => {
+-			if (event.error?.url) {
+-				void this.importGatewayApiKey(event.error.url, gatewayUrl);
+-			}
+-			if (!event.loading && (this.gatewayWaitingForKey || !this.gatewayBrowserVisible)) {
+-				void this.refreshSub2ApiSession(model, gatewayUrl);
+-			}
+-		}));
+-		const importTimer = mainWindow.setInterval(() => {
+-			if (this.gatewayWaitingForKey) {
+-				void this.refreshSub2ApiSession(model, gatewayUrl);
+-			}
+-		}, SUB2API_IMPORT_POLL_MS);
+-		this.gatewayDisposables.add(toDisposable(() => mainWindow.clearInterval(importTimer)));
+-		if (model.url) {
+-			void this.importGatewayApiKey(model.url, gatewayUrl);
+-		}
+-	}
+-
+-	private async refreshSub2ApiSession(model: IBrowserViewModel, gatewayUrl: string): Promise<void> {
+-		if (this.gatewayApiKeyImported || this.gatewayImportInProgress || model.loading || !hasSameOrigin(model.url, gatewayUrl)) {
+-			return;
+-		}
+-
+-		this.gatewayImportInProgress = true;
+-		try {
+-			const result = parseSub2ApiScriptResult(await model.executeJavaScript(SUB2API_SESSION_SCRIPT));
+-			if (!result || this.activeDrawer !== 'gateway') {
+-				return;
+-			}
+-
+-			switch (result.status) {
+-				case 'authenticated':
+-					if (result.apiKey) {
+-						await this.saveImportedGatewayApiKey({ apiKey: result.apiKey, baseUrl: inferGatewayApiBaseUrl(gatewayUrl) });
+-					}
+-					break;
+-				case 'noKey':
+-					if (!this.gatewayBrowserVisible) {
+-						this.renderGatewayNoKey(gatewayUrl);
+-					}
+-					break;
+-				case 'signedOut':
+-					if (!this.gatewayBrowserVisible) {
+-						this.renderGatewayLogin(gatewayUrl);
+-					}
+-					break;
+-				case 'error':
+-					if (!this.gatewayBrowserVisible) {
+-						this.renderGatewayLogin(gatewayUrl, result.message ?? localize('aiHub.gatewayConnectionFailed', "无法连接 AI Gateway。"));
+-					}
+-					break;
+-			}
+-		} catch (error) {
+-			this.logService.trace('[aiHub] failed to read Sub2API session', error);
+-			if (!this.gatewayBrowserVisible && this.activeDrawer === 'gateway') {
+-				this.renderGatewayLogin(gatewayUrl, localize('aiHub.gatewayConnectionFailed', "无法连接 AI Gateway。"));
+-			}
+-		} finally {
+-			this.gatewayImportInProgress = false;
+-		}
+-	}
+-
+-	private async importGatewayApiKey(navigatedUrl: string, gatewayUrl: string): Promise<void> {
+-		if (navigatedUrl === this.lastImportedGatewayUrl) {
+-			return;
+-		}
+-
+-		const imported = parseGatewayImportedKey(navigatedUrl, gatewayUrl);
+-		if (!imported) {
+-			return;
+-		}
+-
+-		this.lastImportedGatewayUrl = navigatedUrl;
+-		await this.saveImportedGatewayApiKey(imported);
+-	}
+-
+-	private async saveImportedGatewayApiKey(imported: { apiKey: string; baseUrl: string }): Promise<void> {
+-		if (imported.apiKey === this.lastImportedApiKey) {
+-			this.gatewayApiKeyImported = true;
+-			await this.showGatewayConnected(imported.apiKey);
+-			return;
+-		}
+-
+-		await this.aiConfigService.saveCodexSettings({ baseUrl: imported.baseUrl, apiKey: imported.apiKey });
+-		this.lastImportedApiKey = imported.apiKey;
+-		this.gatewayApiKeyImported = true;
+-		await this.showGatewayConnected(imported.apiKey);
+-		this.notificationService.info(localize('aiHub.gatewayKeyImported', "AI Gateway API Key 已导入 Codex。"));
+-	}
+-
+-	private createGatewayPanel(title: string, description: string, message?: string): { card: HTMLElement; actions: HTMLElement; status: HTMLElement } {
+-		const document = mainWindow.document;
+-		this.gatewayDomDisposables.clear();
+-		const style = document.createElement('style');
+-		style.textContent = `
+-			:host { display: block; box-sizing: border-box; height: 100%; overflow: auto; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: transparent; }
+-			.surface { display: flex; box-sizing: border-box; min-height: 100%; align-items: center; justify-content: center; padding: 48px 32px; }
+-			.panel { position: relative; width: min(100%, 440px); box-sizing: border-box; overflow: hidden; padding: 32px; border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); border-radius: 18px; background: color-mix(in srgb, var(--vscode-editorWidget-background) 96%, transparent); box-shadow: 0 24px 64px color-mix(in srgb, var(--vscode-widget-shadow) 55%, transparent), inset 0 1px color-mix(in srgb, white 7%, transparent); }
+-			.panel::before { position: absolute; inset: 0 0 auto; height: 3px; content: ''; background: linear-gradient(90deg, var(--vscode-button-background), color-mix(in srgb, var(--vscode-button-background) 20%, transparent)); }
+-			.gateway-mark { display: grid; width: 44px; height: 44px; margin-bottom: 24px; place-items: center; color: var(--vscode-button-foreground); background: linear-gradient(135deg, var(--vscode-button-background), color-mix(in srgb, var(--vscode-button-background) 66%, #7c5cff)); border-radius: 13px; box-shadow: 0 10px 28px color-mix(in srgb, var(--vscode-button-background) 30%, transparent); font-size: 13px; font-weight: 750; letter-spacing: -.02em; }
+-			.eyebrow { margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+-			h2 { margin: 0 0 10px; font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+-			.description { margin: 0 0 24px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.7; }
+-			label { display: block; margin: 0 0 7px; font-size: 11px; font-weight: 600; }
+-			input { width: 100%; min-height: 40px; box-sizing: border-box; margin: 0 0 16px; padding: 9px 12px; color: var(--vscode-input-foreground); background: color-mix(in srgb, var(--vscode-input-background) 94%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-input-border) 78%, var(--vscode-foreground) 10%); border-radius: 9px; outline: none; transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease; }
+-			input:hover { border-color: color-mix(in srgb, var(--vscode-input-border) 58%, var(--vscode-foreground) 24%); }
+-			input:focus { background: var(--vscode-input-background); border-color: var(--vscode-focusBorder); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent); }
+-			.actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
+-			button { min-height: 36px; padding: 8px 16px; cursor: pointer; color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 1px solid transparent; border-radius: 9px; font-weight: 600; transition: filter 120ms ease, transform 120ms ease, border-color 120ms ease; }
+-			button:hover { background: var(--vscode-button-hoverBackground); filter: brightness(1.04); }
+-			button:active { transform: translateY(1px); }
+-			button.secondary { color: var(--vscode-button-secondaryForeground); background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 84%, transparent); border-color: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+-			button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+-			button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+-			button:disabled { cursor: default; opacity: .55; filter: none; transform: none; }
+-			.status { min-height: 18px; margin-top: 14px; font-size: 12px; line-height: 1.5; color: var(--vscode-errorForeground); }
+-			.status.loading { display: flex; align-items: center; gap: 8px; }
+-			.status.loading::before { width: 12px; height: 12px; box-sizing: border-box; content: ''; border: 2px solid color-mix(in srgb, var(--vscode-descriptionForeground) 28%, transparent); border-top-color: var(--vscode-descriptionForeground); border-radius: 999px; animation: spin .8s linear infinite; }
+-			.key-status { margin: 18px 0 0; padding: 13px 14px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-textBlockQuote-background) 86%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent); border-radius: 9px; font-family: var(--vscode-editor-font-family); font-size: 12px; letter-spacing: .04em; }
+-			@keyframes spin { to { transform: rotate(360deg); } }
+-			@media (max-width: 520px) { .surface { padding: 24px 18px; } .panel { padding: 26px 22px; border-radius: 14px; } }
+-			@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; } }
+-		`;
+-
+-		const card = document.createElement('div');
+-		card.className = 'panel';
+-		const surface = document.createElement('div');
+-		surface.className = 'surface';
+-		const mark = document.createElement('div');
+-		mark.className = 'gateway-mark';
+-		mark.textContent = 'AI';
+-		const eyebrow = document.createElement('div');
+-		eyebrow.className = 'eyebrow';
+-		eyebrow.textContent = 'Sub2API Gateway';
+-		const heading = document.createElement('h2');
+-		heading.textContent = title;
+-		const descriptionElement = document.createElement('p');
+-		descriptionElement.className = 'description';
+-		descriptionElement.textContent = description;
+-		const actions = document.createElement('div');
+-		actions.className = 'actions';
+-		const status = document.createElement('div');
+-		status.className = 'status';
+-		status.setAttribute('role', 'status');
+-		status.setAttribute('aria-live', 'polite');
+-		status.textContent = message ?? '';
+-		card.append(mark, eyebrow, heading, descriptionElement);
+-		surface.appendChild(card);
+-		this.gatewayRoot.replaceChildren(style, surface);
+-		return { card, actions, status };
+-	}
+-
+-	private renderGatewayLoading(message: string): void {
+-		const { card, status } = this.createGatewayPanel(
+-			localize('aiHub.gatewayLoginTitle', "登录 AI Gateway"),
+-			localize('aiHub.gatewayConnectingDescription', "正在安全连接 Sub2API 中转站。")
+-		);
+-		status.style.color = 'var(--vscode-descriptionForeground)';
+-		status.classList.add('loading');
+-		status.textContent = message;
+-		card.appendChild(status);
+-	}
+-
+-	private renderGatewayLogin(gatewayUrl: string, message?: string): void {
+-		this.gatewayBrowserVisible = false;
+-		this.gatewayWaitingForKey = false;
+-		this.gatewayApiKeyImported = false;
+-		const document = mainWindow.document;
+-		const { card, actions, status } = this.createGatewayPanel(
+-			localize('aiHub.gatewayLoginTitle', "登录 AI Gateway"),
+-			localize('aiHub.gatewayLoginDescription', "登录 Sub2API 后将静默读取可用 API Key，并自动保存到 AI Setting。"),
+-			message
+-		);
+-		const form = document.createElement('form');
+-		const emailLabel = document.createElement('label');
+-		emailLabel.htmlFor = 'sub2ApiEmail';
+-		emailLabel.textContent = localize('aiHub.gatewayEmail', "邮箱");
+-		const emailInput = document.createElement('input');
+-		emailInput.id = 'sub2ApiEmail';
+-		emailInput.type = 'email';
+-		emailInput.autocomplete = 'username';
+-		emailInput.required = true;
+-		const passwordLabel = document.createElement('label');
+-		passwordLabel.htmlFor = 'sub2ApiPassword';
+-		passwordLabel.textContent = localize('aiHub.gatewayPassword', "密码");
+-		const passwordInput = document.createElement('input');
+-		passwordInput.id = 'sub2ApiPassword';
+-		passwordInput.type = 'password';
+-		passwordInput.autocomplete = 'current-password';
+-		passwordInput.required = true;
+-		const submitButton = document.createElement('button');
+-		submitButton.type = 'submit';
+-		submitButton.textContent = localize('aiHub.gatewayLogin', "登录并导入");
+-		const webLoginButton = document.createElement('button');
+-		webLoginButton.type = 'button';
+-		webLoginButton.className = 'secondary';
+-		webLoginButton.textContent = localize('aiHub.gatewayWebLogin', "使用网页登录");
+-		actions.append(submitButton, webLoginButton);
+-		form.append(emailLabel, emailInput, passwordLabel, passwordInput, actions, status);
+-		card.appendChild(form);
+-
+-		this.gatewayDomDisposables.add(addDisposableListener(form, EventType.SUBMIT, event => {
+-			event.preventDefault();
+-			const email = emailInput.value.trim();
+-			const password = passwordInput.value;
+-			if (!email || !password) {
+-				status.textContent = localize('aiHub.gatewayCredentialsRequired', "请输入邮箱和密码。");
+-				return;
+-			}
+-			submitButton.disabled = true;
+-			status.style.color = 'var(--vscode-descriptionForeground)';
+-			status.textContent = localize('aiHub.gatewayLoggingIn', "正在登录...");
+-			void this.loginSub2Api(gatewayUrl, email, password);
+-		}));
+-		this.gatewayDomDisposables.add(addDisposableListener(webLoginButton, EventType.CLICK, () => {
+-			void this.openGatewayPage('/login?redirect=/keys', gatewayUrl, true);
+-		}));
+-		mainWindow.setTimeout(() => emailInput.focus(), 0);
+-	}
+-
+-	private renderGatewayTwoFactor(gatewayUrl: string, tempToken: string, userEmailMasked?: string, message?: string): void {
+-		const document = mainWindow.document;
+-		const description = userEmailMasked
+-			? localize('aiHub.gatewayTwoFactorDescriptionWithEmail', "请输入 {0} 的六位验证码。", userEmailMasked)
+-			: localize('aiHub.gatewayTwoFactorDescription', "请输入六位双重验证代码。");
+-		const { card, actions, status } = this.createGatewayPanel(localize('aiHub.gatewayTwoFactorTitle', "双重验证"), description, message);
+-		const form = document.createElement('form');
+-		const codeLabel = document.createElement('label');
+-		codeLabel.htmlFor = 'sub2ApiTotpCode';
+-		codeLabel.textContent = localize('aiHub.gatewayTwoFactorCode', "验证码");
+-		const codeInput = document.createElement('input');
+-		codeInput.id = 'sub2ApiTotpCode';
+-		codeInput.type = 'text';
+-		codeInput.inputMode = 'numeric';
+-		codeInput.autocomplete = 'one-time-code';
+-		codeInput.maxLength = 6;
+-		codeInput.pattern = '[0-9]{6}';
+-		codeInput.required = true;
+-		const submitButton = document.createElement('button');
+-		submitButton.type = 'submit';
+-		submitButton.textContent = localize('aiHub.gatewayVerifyAndImport', "验证并导入");
+-		const backButton = document.createElement('button');
+-		backButton.type = 'button';
+-		backButton.className = 'secondary';
+-		backButton.textContent = localize('aiHub.gatewayBackToLogin', "返回登录");
+-		actions.append(submitButton, backButton);
+-		form.append(codeLabel, codeInput, actions, status);
+-		card.appendChild(form);
+-
+-		this.gatewayDomDisposables.add(addDisposableListener(form, EventType.SUBMIT, event => {
+-			event.preventDefault();
+-			const code = codeInput.value.trim();
+-			if (!/^\d{6}$/.test(code)) {
+-				status.textContent = localize('aiHub.gatewayTwoFactorCodeRequired', "请输入六位数字验证码。");
+-				return;
+-			}
+-			submitButton.disabled = true;
+-			status.style.color = 'var(--vscode-descriptionForeground)';
+-			status.textContent = localize('aiHub.gatewayVerifying', "正在验证...");
+-			void this.loginSub2ApiTwoFactor(gatewayUrl, tempToken, code, userEmailMasked);
+-		}));
+-		this.gatewayDomDisposables.add(addDisposableListener(backButton, EventType.CLICK, () => this.renderGatewayLogin(gatewayUrl)));
+-		mainWindow.setTimeout(() => codeInput.focus(), 0);
+-	}
+-
+-	private renderGatewayNoKey(gatewayUrl: string, message?: string): void {
+-		this.gatewayBrowserVisible = false;
+-		this.gatewayWaitingForKey = false;
+-		const document = mainWindow.document;
+-		const { card, actions, status } = this.createGatewayPanel(
+-			localize('aiHub.gatewayNoKeyTitle', "尚未创建 API Key"),
+-			localize('aiHub.gatewayNoKeyDescription', "登录成功，但账户中没有可用 Key。请先创建 Key，创建完成后会自动导入。"),
+-			message
+-		);
+-		const createButton = document.createElement('button');
+-		createButton.type = 'button';
+-		createButton.textContent = localize('aiHub.gatewayCreateKey', "创建 Key");
+-		const retryButton = document.createElement('button');
+-		retryButton.type = 'button';
+-		retryButton.className = 'secondary';
+-		retryButton.textContent = localize('aiHub.gatewayRetryKey', "重新检测");
+-		const switchAccountButton = document.createElement('button');
+-		switchAccountButton.type = 'button';
+-		switchAccountButton.className = 'secondary';
+-		switchAccountButton.textContent = localize('aiHub.gatewaySwitchAccount', "切换账号");
+-		actions.append(createButton, retryButton, switchAccountButton);
+-		card.append(actions, status);
+-		this.gatewayDomDisposables.add(addDisposableListener(createButton, EventType.CLICK, () => void this.openGatewayPage('/keys', gatewayUrl, true)));
+-		this.gatewayDomDisposables.add(addDisposableListener(retryButton, EventType.CLICK, () => {
+-			if (this.gatewayModel) {
+-				this.renderGatewayLoading(localize('aiHub.gatewayCheckingKey', "正在检查 API Key..."));
+-				void this.refreshSub2ApiSession(this.gatewayModel, gatewayUrl);
+-			}
+-		}));
+-		this.gatewayDomDisposables.add(addDisposableListener(switchAccountButton, EventType.CLICK, () => void this.signOutSub2Api(gatewayUrl)));
+-	}
+-
+-	private async showGatewayConnected(apiKey: string): Promise<void> {
+-		this.gatewayBrowserVisible = false;
+-		this.gatewayWaitingForKey = false;
+-		if (this.gatewayModel) {
+-			await this.gatewayModel.setVisible(false).catch(error => this.logService.warn('[aiHub] failed to hide gateway after import', error));
+-		}
+-		if (this.activeDrawer !== 'gateway') {
+-			return;
+-		}
+-		const document = mainWindow.document;
+-		const { card, actions, status } = this.createGatewayPanel(
+-			localize('aiHub.gatewayConnectedTitle', "AI Gateway 已连接"),
+-			localize('aiHub.gatewayConnectedDescription', "API 地址和 Key 已自动保存到 AI Setting 的 Codex 配置。")
+-		);
+-		const keyStatus = document.createElement('div');
+-		keyStatus.className = 'key-status';
+-		keyStatus.textContent = apiKey.length > 8 ? `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}` : '••••••••';
+-		const settingsButton = document.createElement('button');
+-		settingsButton.type = 'button';
+-		settingsButton.textContent = localize('aiHub.gatewayViewSettings', "查看 AI Setting");
+-		const gatewayButton = document.createElement('button');
+-		gatewayButton.type = 'button';
+-		gatewayButton.className = 'secondary';
+-		gatewayButton.textContent = localize('aiHub.gatewayOpenDashboard', "打开网关");
+-		actions.append(settingsButton, gatewayButton);
+-		status.style.color = 'var(--vscode-testing-iconPassed)';
+-		status.textContent = localize('aiHub.gatewayImportComplete', "导入完成");
+-		card.append(keyStatus, actions, status);
+-		this.gatewayDomDisposables.add(addDisposableListener(settingsButton, EventType.CLICK, () => {
+-			void (async () => {
+-				await this.refreshSettings();
+-				await this.show('settings');
+-			})();
+-		}));
+-		this.gatewayDomDisposables.add(addDisposableListener(gatewayButton, EventType.CLICK, () => {
+-			void this.openGatewayPage('/dashboard', this.productService.aiGatewayUrl ?? '', false);
+-		}));
+-	}
+-
+-	private async loginSub2Api(gatewayUrl: string, email: string, password: string): Promise<void> {
+-		const model = this.gatewayModel;
+-		if (!model || !hasSameOrigin(model.url, gatewayUrl)) {
+-			this.renderGatewayLogin(gatewayUrl, localize('aiHub.gatewayLoginPageUnavailable', "AI Gateway 登录页尚未准备好，请稍后重试。"));
+-			return;
+-		}
+-		this.renderGatewayLoading(localize('aiHub.gatewayLoggingIn', "正在登录..."));
+-		try {
+-			const result = parseSub2ApiScriptResult(await model.executeJavaScript(buildSub2ApiLoginScript(email, password)));
+-			if (this.activeDrawer !== 'gateway') {
+-				return;
+-			}
+-			if (result?.status === 'twoFactor' && result.tempToken) {
+-				this.renderGatewayTwoFactor(gatewayUrl, result.tempToken, result.userEmailMasked);
+-				return;
+-			}
+-			if (result?.status === 'authenticated') {
+-				this.gatewayApiKeyImported = false;
+-				await this.refreshSub2ApiSession(model, gatewayUrl);
+-				return;
+-			}
+-			this.renderGatewayLogin(gatewayUrl, result?.message ?? localize('aiHub.gatewayLoginFailed', "登录失败，请检查账号和密码。"));
+-		} catch (error) {
+-			this.logService.warn('[aiHub] Sub2API login failed', error);
+-			if (this.activeDrawer === 'gateway') {
+-				this.renderGatewayLogin(gatewayUrl, localize('aiHub.gatewayLoginFailed', "登录失败，请检查账号和密码。"));
+-			}
+-		}
+-	}
+-
+-	private async loginSub2ApiTwoFactor(gatewayUrl: string, tempToken: string, code: string, userEmailMasked?: string): Promise<void> {
+-		const model = this.gatewayModel;
+-		if (!model || !hasSameOrigin(model.url, gatewayUrl)) {
+-			this.renderGatewayTwoFactor(gatewayUrl, tempToken, userEmailMasked, localize('aiHub.gatewayLoginPageUnavailable', "AI Gateway 登录页尚未准备好，请稍后重试。"));
+-			return;
+-		}
+-		this.renderGatewayLoading(localize('aiHub.gatewayVerifying', "正在验证..."));
+-		try {
+-			const result = parseSub2ApiScriptResult(await model.executeJavaScript(buildSub2ApiTwoFactorScript(tempToken, code)));
+-			if (this.activeDrawer !== 'gateway') {
+-				return;
+-			}
+-			if (result?.status === 'authenticated') {
+-				this.gatewayApiKeyImported = false;
+-				await this.refreshSub2ApiSession(model, gatewayUrl);
+-				return;
+-			}
+-			this.renderGatewayTwoFactor(gatewayUrl, tempToken, userEmailMasked, result?.message ?? localize('aiHub.gatewayInvalidTwoFactorCode', "验证码错误。"));
+-		} catch (error) {
+-			this.logService.warn('[aiHub] Sub2API two-factor login failed', error);
+-			if (this.activeDrawer === 'gateway') {
+-				this.renderGatewayTwoFactor(gatewayUrl, tempToken, userEmailMasked, localize('aiHub.gatewayInvalidTwoFactorCode', "验证码错误。"));
+-			}
+-		}
+-	}
+-
+-	private async openGatewayPage(path: string, gatewayUrl: string, waitForKey: boolean): Promise<void> {
+-		const model = this.gatewayModel;
+-		if (!model || !gatewayUrl) {
+-			return;
+-		}
+-		let targetUrl: string;
+-		try {
+-			targetUrl = new URL(path, gatewayUrl).toString();
+-		} catch {
+-			return;
+-		}
+-		this.gatewayDomDisposables.clear();
+-		this.gatewayRoot.replaceChildren();
+-		this.gatewayBrowserVisible = true;
+-		this.gatewayWaitingForKey = waitForKey;
+-		this.gatewayApiKeyImported = false;
+-		await model.loadURL(targetUrl);
+-		if (this.activeDrawer !== 'gateway') {
+-			await model.setVisible(false);
+-			return;
+-		}
+-		await this.layoutGateway();
+-		await model.setVisible(true);
+-		await this.layoutGateway();
+-		await model.focus();
+-	}
+-
+-	private async signOutSub2Api(gatewayUrl: string): Promise<void> {
+-		if (this.gatewayModel && hasSameOrigin(this.gatewayModel.url, gatewayUrl)) {
+-			await this.gatewayModel.executeJavaScript(`(() => {
+-				window.localStorage.removeItem('auth_token');
+-				window.localStorage.removeItem('refresh_token');
+-				window.localStorage.removeItem('auth_user');
+-				window.localStorage.removeItem('token_expires_at');
+-			})()`);
+-		}
+-		this.gatewayApiKeyImported = false;
+-		this.lastImportedApiKey = undefined;
+-		this.renderGatewayLogin(gatewayUrl);
+-	}
+-
+-	private async layoutGateway(): Promise<void> {
+-		if (!this.gatewayModel || !this.gatewayBrowserVisible || this.activeDrawer !== 'gateway') {
+-			return;
+-		}
+-
+-		const rect = this.gatewayHost.getBoundingClientRect();
+-		if (rect.width < 1 || rect.height < 1) {
+-			return;
+-		}
+-
+-		await this.gatewayModel.layout({
+-			windowId: mainWindow.vscodeWindowId,
+-			x: rect.left,
+-			y: rect.top,
+-			width: rect.width,
+-			height: rect.height,
+-			zoomFactor: getZoomFactor(mainWindow),
+-			cornerRadius: 0,
+-		});
+-	}
+-
+-	private layoutDrawer(): void {
+-		const workbenchRect = this.layoutService.getContainer(mainWindow).getBoundingClientRect();
+-		const titleBarRect = this.layoutService.getContainer(mainWindow, Parts.TITLEBAR_PART)?.getBoundingClientRect();
+-		const top = titleBarRect ? Math.max(0, titleBarRect.bottom - workbenchRect.top) : 0;
+-		this.container.style.top = `${top}px`;
+-	}
+-
+-	private waitForTransition(): Promise<void> {
+-		return new Promise(resolve => mainWindow.setTimeout(resolve, DRAWER_TRANSITION_MS));
+-	}
+-
+-	private async refreshSettings(): Promise<void> {
+-		const state = await this.aiConfigService.getState();
+-		this.renderSettings(state);
+-	}
+-
+-	private renderSettings(state: Awaited<ReturnType<IAiConfigService['getState']>>): void {
+-		const document = mainWindow.document;
+-		this.settingsDomDisposables.clear();
+-		const fragment = document.createDocumentFragment();
+-
+-		const styleElement = document.createElement('style');
+-		styleElement.textContent = `
+-			:host { display: block; box-sizing: border-box; height: 100%; overflow: auto; font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
+-			* { box-sizing: border-box; }
+-			.page { width: min(100%, 660px); margin: 0 auto; padding: 34px 28px 44px; }
+-			.hero { position: relative; overflow: hidden; margin-bottom: 26px; padding: 26px; background: linear-gradient(135deg, color-mix(in srgb, var(--vscode-button-background) 16%, var(--vscode-editorWidget-background)), var(--vscode-editorWidget-background) 58%); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 11%, transparent); border-radius: 16px; box-shadow: inset 0 1px color-mix(in srgb, white 6%, transparent); }
+-			.hero::after { position: absolute; top: -74px; right: -54px; width: 180px; height: 180px; content: ''; background: color-mix(in srgb, var(--vscode-button-background) 16%, transparent); border-radius: 999px; filter: blur(4px); }
+-			.eyebrow { position: relative; z-index: 1; margin-bottom: 10px; color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 750; letter-spacing: .15em; text-transform: uppercase; }
+-			.hero-row { position: relative; z-index: 1; display: flex; gap: 18px; align-items: flex-end; justify-content: space-between; }
+-			.hero-copy { min-width: 0; }
+-			h1 { margin: 0 0 8px; font-size: 24px; font-weight: 680; letter-spacing: -.025em; }
+-			.hero p { max-width: 410px; margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.65; }
+-			.section-label { margin: 28px 2px 12px; color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+-			.mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+-			.mode-button { display: flex; min-width: 0; min-height: 78px; gap: 10px; align-items: center; padding: 13px; color: var(--vscode-foreground); text-align: left; background: color-mix(in srgb, var(--vscode-editorWidget-background) 92%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent); border-radius: 12px; }
+-			.mode-button:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground) 75%, var(--vscode-editorWidget-background)); border-color: color-mix(in srgb, var(--vscode-foreground) 17%, transparent); }
+-			.mode-button[aria-pressed="true"] { color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-button-background) 13%, var(--vscode-editorWidget-background)); border-color: color-mix(in srgb, var(--vscode-button-background) 58%, transparent); box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-button-background) 12%, transparent); }
+-			.mode-mark { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent); border-radius: 10px; font-size: 13px; font-weight: 750; }
+-			.mode-button[aria-pressed="true"] .mode-mark { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+-			.mode-copy { display: block; min-width: 0; }
+-			.mode-name { display: block; overflow: hidden; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+-			.mode-description { display: block; overflow: hidden; margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+-			.agent-note { display: flex; gap: 7px; align-items: center; margin: 11px 2px 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
+-			.agent-note::before { width: 6px; height: 6px; content: ''; background: var(--vscode-testing-iconPassed); border-radius: 999px; }
+-			.providers { display: grid; gap: 12px; }
+-			.provider-card, .editor-card { overflow: hidden; background: color-mix(in srgb, var(--vscode-editorWidget-background) 94%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent); border-radius: 14px; box-shadow: inset 0 1px color-mix(in srgb, white 5%, transparent); }
+-			.provider-header { display: flex; gap: 12px; align-items: center; padding: 16px 18px; }
+-			.provider-mark { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; color: var(--vscode-button-foreground); background: linear-gradient(135deg, var(--vscode-button-background), color-mix(in srgb, var(--vscode-button-background) 66%, #7c5cff)); border-radius: 11px; font-size: 12px; font-weight: 750; }
+-			.provider-copy { min-width: 0; flex: 1; }
+-			.provider-title { font-size: 13px; font-weight: 650; }
+-			.provider-subtitle { margin-top: 3px; color: var(--vscode-descriptionForeground); font-size: 10px; }
+-			.fields { padding: 17px 18px 18px; border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+-			.fields[data-enabled="false"] { display: none; }
+-			label { display: block; margin-bottom: 7px; font-size: 11px; font-weight: 600; }
+-			input[type=text], input[type=password] { width: 100%; min-height: 39px; padding: 9px 11px; margin-bottom: 15px; color: var(--vscode-input-foreground); background: color-mix(in srgb, var(--vscode-input-background) 94%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-input-border) 78%, var(--vscode-foreground) 10%); border-radius: 9px; outline: none; transition: border-color 120ms ease, box-shadow 120ms ease; }
+-			input:hover { border-color: color-mix(in srgb, var(--vscode-input-border) 58%, var(--vscode-foreground) 24%); }
+-			input:focus { border-color: var(--vscode-focusBorder); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent); }
+-			button { min-height: 36px; padding: 8px 15px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 1px solid transparent; border-radius: 9px; cursor: pointer; font-weight: 600; transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease; }
+-			button:hover { background: var(--vscode-button-hoverBackground); }
+-			button:active { transform: translateY(1px); }
+-			button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+-			button.secondary { color: var(--vscode-button-secondaryForeground); background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 82%, transparent); border-color: color-mix(in srgb, var(--vscode-foreground) 9%, transparent); }
+-			button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+-			.hint { margin: -5px 0 14px; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.5; }
+-			.status { margin-left: 7px; color: var(--vscode-testing-iconPassed); font-size: 10px; font-weight: 500; }
+-			.field-actions { display: flex; align-items: center; justify-content: space-between; }
+-			.connected-badge { display: inline-flex; gap: 6px; align-items: center; color: var(--vscode-descriptionForeground); font-size: 10px; }
+-			.connected-badge::before { width: 6px; height: 6px; content: ''; background: var(--vscode-testing-iconPassed); border-radius: 999px; }
+-			.switch { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; margin: 0; }
+-			.switch input { opacity: 0; width: 0; height: 0; }
+-			.switch .slider { position: absolute; inset: 0; cursor: pointer; background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); border-radius: 999px; transition: background .15s; }
+-			.switch .slider::before { position: absolute; width: 16px; height: 16px; top: 2px; left: 2px; content: ""; background: white; border-radius: 50%; box-shadow: 0 2px 5px rgba(0, 0, 0, .24); transition: transform .15s; }
+-			.switch input:checked + .slider { background: var(--vscode-button-background); }
+-			.switch input:checked + .slider::before { transform: translateX(16px); }
+-			.switch input:disabled + .slider { opacity: 0.45; cursor: default; }
+-			.editor-card { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 17px 18px; }
+-			.editor-card-copy { min-width: 0; }
+-			.editor-card-title { font-size: 12px; font-weight: 650; }
+-			.editor-card-description { margin: 4px 0 0; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.45; }
+-			@media (max-width: 620px) { .page { padding: 24px 18px 34px; } .hero-row { align-items: flex-start; flex-direction: column; } .mode-grid { grid-template-columns: 1fr; } .mode-button { min-height: 62px; } .editor-card { align-items: stretch; flex-direction: column; } }
+-			@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; } }
+-		`;
+-		fragment.appendChild(styleElement);
+-
+-		const createButton = (id: string, label: string, className?: string): HTMLButtonElement => {
+-			const button = document.createElement('button');
+-			button.id = id;
+-			button.textContent = label;
+-			if (className) {
+-				button.className = className;
+-			}
+-			return button;
+-		};
+-
+-		const createInput = (id: string, type: 'text' | 'password', placeholder: string, value = ''): HTMLInputElement => {
+-			const input = document.createElement('input');
+-			input.id = id;
+-			input.type = type;
+-			input.placeholder = placeholder;
+-			input.value = value;
+-			return input;
+-		};
+-
+-		const appendLabel = (parent: HTMLElement, forId: string, labelText: string, showStatus: boolean): void => {
+-			const label = document.createElement('label');
+-			label.htmlFor = forId;
+-			label.append(document.createTextNode(labelText));
+-			if (showStatus) {
+-				const status = document.createElement('span');
+-				status.className = 'status';
+-				status.textContent = '已配置 · 留空保持不变';
+-				label.appendChild(status);
+-			}
+-			parent.appendChild(label);
+-		};
+-
+-		const createSwitch = (id: string, checked: boolean, disabled: boolean): HTMLLabelElement => {
+-			const label = document.createElement('label');
+-			label.className = 'switch';
+-			const input = document.createElement('input');
+-			input.type = 'checkbox';
+-			input.id = id;
+-			input.checked = checked;
+-			input.disabled = disabled;
+-			const slider = document.createElement('span');
+-			slider.className = 'slider';
+-			label.append(input, slider);
+-			return label;
+-		};
+-
+-		const createSection = (title: string, markText: string, subtitle: string, switchElement: HTMLLabelElement, fieldsId: string, enabled: boolean, baseUrlId: string, baseUrl: string, apiKeyId: string, hasApiKey: boolean, saveButtonId: string, hint?: string): HTMLElement => {
+-			const card = document.createElement('div');
+-			card.className = 'provider-card';
+-			const header = document.createElement('div');
+-			header.className = 'provider-header';
+-			const mark = document.createElement('div');
+-			mark.className = 'provider-mark';
+-			mark.textContent = markText;
+-			const copy = document.createElement('div');
+-			copy.className = 'provider-copy';
+-			const titleElement = document.createElement('div');
+-			titleElement.className = 'provider-title';
+-			titleElement.textContent = title;
+-			const subtitleElement = document.createElement('div');
+-			subtitleElement.className = 'provider-subtitle';
+-			subtitleElement.textContent = subtitle;
+-			copy.append(titleElement, subtitleElement);
+-			header.append(mark, copy, switchElement);
+-			const fields = document.createElement('div');
+-			fields.className = 'fields';
+-			fields.id = fieldsId;
+-			fields.dataset.enabled = enabled ? 'true' : 'false';
+-			appendLabel(fields, baseUrlId, 'Base URL', false);
+-			fields.appendChild(createInput(baseUrlId, 'text', 'https://...', baseUrl));
+-			appendLabel(fields, apiKeyId, 'API Key ', hasApiKey);
+-			fields.appendChild(createInput(apiKeyId, 'password', hasApiKey ? '••••••••' : 'sk-...'));
+-			if (hint) {
+-				const hintElement = document.createElement('div');
+-				hintElement.className = 'hint';
+-				hintElement.textContent = hint;
+-				fields.appendChild(hintElement);
+-			}
+-			const fieldActions = document.createElement('div');
+-			fieldActions.className = 'field-actions';
+-			fieldActions.appendChild(createButton(saveButtonId, '保存配置'));
+-			if (hasApiKey) {
+-				const connectedBadge = document.createElement('span');
+-				connectedBadge.className = 'connected-badge';
+-				connectedBadge.textContent = '凭据已连接';
+-				fieldActions.appendChild(connectedBadge);
+-			}
+-			fields.appendChild(fieldActions);
+-			card.append(header, fields);
+-			return card;
+-		};
+-
+-		const page = document.createElement('main');
+-		page.className = 'page';
+-		const hero = document.createElement('section');
+-		hero.className = 'hero';
+-		const eyebrow = document.createElement('div');
+-		eyebrow.className = 'eyebrow';
+-		eyebrow.textContent = 'AI WORKSPACE';
+-		const heroRow = document.createElement('div');
+-		heroRow.className = 'hero-row';
+-		const heroCopy = document.createElement('div');
+-		heroCopy.className = 'hero-copy';
+-		const heroTitle = document.createElement('h1');
+-		heroTitle.textContent = 'AI 工作区';
+-		const heroDescription = document.createElement('p');
+-		heroDescription.textContent = '在一个入口管理编辑模式、Agent 与模型网关，底层继续使用完整的 VS Code 工作区能力。';
+-		heroCopy.append(heroTitle, heroDescription);
+-		heroRow.append(heroCopy, createButton('openGateway', '连接 Gateway'));
+-		hero.append(eyebrow, heroRow);
+-		page.appendChild(hero);
+-
+-		const modeLabel = document.createElement('div');
+-		modeLabel.className = 'section-label';
+-		modeLabel.textContent = '工作模式';
+-		page.appendChild(modeLabel);
+-
+-		const modeGrid = document.createElement('div');
+-		modeGrid.className = 'mode-grid';
+-		modeGrid.setAttribute('role', 'group');
+-		modeGrid.setAttribute('aria-label', 'AI mode');
+-		for (const [mode, label, description, markText] of [
+-			['edit', '编辑模式', '完整 IDE 工作区', 'ED'],
+-			['claudeAgent', 'Claude Agent', '专注 Claude 对话', 'CL'],
+-			['codexAgent', 'Codex Agent', '专注 Codex 对话', 'CX'],
+-		] as const) {
+-			const button = createButton('', '', 'mode-button');
+-			button.dataset.mode = mode;
+-			button.setAttribute('aria-pressed', state.mode === mode ? 'true' : 'false');
+-			const mark = document.createElement('span');
+-			mark.className = 'mode-mark';
+-			mark.textContent = markText;
+-			const copy = document.createElement('span');
+-			copy.className = 'mode-copy';
+-			const name = document.createElement('span');
+-			name.className = 'mode-name';
+-			name.textContent = label;
+-			const descriptionElement = document.createElement('span');
+-			descriptionElement.className = 'mode-description';
+-			descriptionElement.textContent = description;
+-			copy.append(name, descriptionElement);
+-			button.append(mark, copy);
+-			modeGrid.appendChild(button);
+-		}
+-		page.appendChild(modeGrid);
+-
+-		const agentNote = document.createElement('div');
+-		agentNote.className = 'agent-note';
+-		agentNote.textContent = state.mode === 'edit'
+-			? '当前保持完整编辑器布局；切换模式或扩展后会自动刷新。'
+-			: '当前仅保留所选 Agent 对话；切换模式或扩展后会自动刷新。';
+-		page.appendChild(agentNote);
+-
+-		const providersLabel = document.createElement('div');
+-		providersLabel.className = 'section-label';
+-		providersLabel.textContent = '模型与凭据';
+-		const providers = document.createElement('div');
+-		providers.className = 'providers';
+-		providers.append(createSection(
+-			'Claude Code',
+-			'CL',
+-			'Anthropic Agent 与环境配置',
+-			createSwitch('claudeEnabled', state.claudeEnabled, state.mode !== 'edit'),
+-			'claudeFields',
+-			state.mode === 'claudeAgent' || (state.mode === 'edit' && state.claudeEnabled),
+-			'claudeBaseUrl',
+-			state.claudeBaseUrl,
+-			'claudeApiKey',
+-			state.claudeHasApiKey,
+-			'saveClaude',
+-		));
+-
+-		providers.append(createSection(
+-			'Codex',
+-			'CX',
+-			'OpenAI Codex 与 Gateway 配置',
+-			createSwitch('codexEnabled', state.codexEnabled, state.mode !== 'edit'),
+-			'codexFields',
+-			state.mode === 'codexAgent' || (state.mode === 'edit' && state.codexEnabled),
+-			'codexBaseUrl',
+-			state.codexBaseUrl,
+-			'codexApiKey',
+-			state.codexHasApiKey,
+-			'saveCodex',
+-			'Codex 在扩展宿主启动时读取凭据；修改后重载窗口即可生效。',
+-		));
+-		page.append(providersLabel, providers);
+-
+-		const editorLabel = document.createElement('div');
+-		editorLabel.className = 'section-label';
+-		editorLabel.textContent = '编辑器';
+-		const editorCard = document.createElement('div');
+-		editorCard.className = 'editor-card';
+-		const editorCopy = document.createElement('div');
+-		editorCopy.className = 'editor-card-copy';
+-		const editorTitle = document.createElement('div');
+-		editorTitle.className = 'editor-card-title';
+-		editorTitle.textContent = 'VS Code 核心设置';
+-		const editorDescription = document.createElement('p');
+-		editorDescription.className = 'editor-card-description';
+-		editorDescription.textContent = '打开键盘、编辑器、终端、扩展等完整设置。';
+-		editorCopy.append(editorTitle, editorDescription);
+-		editorCard.append(editorCopy, createButton('openEditorSettings', '打开设置', 'secondary'));
+-		page.append(editorLabel, editorCard);
+-		fragment.appendChild(page);
+-
+-		this.settingsRoot.replaceChildren(fragment);
+-		this.hookSettingsDom(state.mode);
+-	}
+-
+-	private hookSettingsDom(currentMode: AiHubMode): void {
+-		const $ = (id: string) => this.settingsRoot.querySelector<HTMLElement>(`#${id}`);
+-		this.settingsRoot.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(button => {
+-			this.settingsDomDisposables.add(addDisposableListener(button, EventType.CLICK, () => {
+-				const mode = parseAiHubMode(button.dataset.mode);
+-				if (mode !== currentMode) {
+-					void this.handleSettingsMessage({ type: 'setMode', mode });
+-				}
+-			}));
+-		});
+-
+-		this.registerCheckbox($('claudeEnabled') as HTMLInputElement | null, 'claudeFields', 'claude');
+-		this.registerCheckbox($('codexEnabled') as HTMLInputElement | null, 'codexFields', 'codex');
+-		this.registerSaveButton('saveClaude', 'claude', 'claudeBaseUrl', 'claudeApiKey');
+-		this.registerSaveButton('saveCodex', 'codex', 'codexBaseUrl', 'codexApiKey');
+-
+-		const openGateway = $('openGateway');
+-		if (openGateway) {
+-			this.settingsDomDisposables.add(addDisposableListener(openGateway, EventType.CLICK, () => void this.handleSettingsMessage({ type: 'openGateway' })));
+-		}
+-
+-		const openEditorSettings = $('openEditorSettings');
+-		if (openEditorSettings) {
+-			this.settingsDomDisposables.add(addDisposableListener(openEditorSettings, EventType.CLICK, () => void this.handleSettingsMessage({ type: 'openEditorSettings' })));
+-		}
+-	}
+-
+-	private registerCheckbox(input: HTMLInputElement | null, fieldsId: string, id: 'claude' | 'codex'): void {
+-		if (!input) {
+-			return;
+-		}
+-		this.settingsDomDisposables.add(addDisposableListener(input, EventType.CHANGE, () => {
+-			const fields = this.settingsRoot.querySelector<HTMLElement>(`#${fieldsId}`);
+-			if (fields) {
+-				fields.dataset.enabled = input.checked ? 'true' : 'false';
+-			}
+-			void this.handleSettingsMessage({ type: 'toggleExtension', id, enabled: input.checked });
+-		}));
+-	}
+-
+-	private registerSaveButton(buttonId: string, provider: 'claude' | 'codex', baseUrlId: string, apiKeyId: string): void {
+-		const button = this.settingsRoot.querySelector<HTMLElement>(`#${buttonId}`);
+-		const baseUrl = this.settingsRoot.querySelector<HTMLInputElement>(`#${baseUrlId}`);
+-		const apiKey = this.settingsRoot.querySelector<HTMLInputElement>(`#${apiKeyId}`);
+-		if (!button || !baseUrl || !apiKey) {
+-			return;
+-		}
+-		this.settingsDomDisposables.add(addDisposableListener(button, EventType.CLICK, () => {
+-			void this.handleSettingsMessage({ type: 'save', provider, baseUrl: baseUrl.value, apiKey: apiKey.value });
+-		}));
+-	}
+-
+-	private async handleSettingsMessage(message: any): Promise<void> {
+-		try {
+-			switch (message?.type) {
+-				case 'save': {
+-					const settings = { baseUrl: message.baseUrl ?? '', apiKey: message.apiKey ?? '' };
+-					if (message.provider === 'claude' && settings.apiKey) {
+-						await this.aiConfigService.saveClaudeSettings(settings);
+-					} else if (message.provider === 'codex' && settings.apiKey) {
+-						await this.aiConfigService.saveCodexSettings(settings);
+-					}
+-					await this.refreshSettings();
+-					break;
+-				}
+-				case 'toggleExtension': {
+-					const id = message.id === 'claude' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
+-					const enabled = !!message.enabled;
+-					await this.aiConfigService.setExtensionEnabled(id, enabled);
+-					const agentName = message.id === 'claude' ? 'Claude Code' : 'Codex';
+-					await this.reloadAfterExtensionChange(enabled
+-						? localize('aiHub.agentConnectedReloading', "{0} 已接入，正在刷新工作区...", agentName)
+-						: localize('aiHub.agentDisconnectedReloading', "{0} 已断开，正在刷新工作区...", agentName));
+-					break;
+-				}
+-				case 'setMode': {
+-					const mode = parseAiHubMode(message.mode);
+-					await this.modeController.setMode(mode);
+-					await this.reloadAfterExtensionChange(mode === 'edit'
+-						? localize('aiHub.editModeEnabledReloading', "已切换到编辑模式，正在刷新工作区...")
+-						: localize('aiHub.agentModeEnabledReloading', "已切换到 {0}，正在刷新工作区...", mode === 'claudeAgent' ? 'Claude Agent' : 'Codex Agent'));
+-					break;
+-				}
+-				case 'openGateway': {
+-					await this.toggleGateway();
+-					break;
+-				}
+-				case 'openEditorSettings': {
+-					if (this.modeController.mode !== 'edit') {
+-						this.notificationService.info(localize('aiHub.editorSettingsRequireEditMode', "请先切换到编辑模式再打开编辑器设置。"));
+-						break;
+-					}
+-					await this.close();
+-					await this.commandService.executeCommand('workbench.action.openSettings');
+-					break;
+-				}
+-			}
+-		} catch (error) {
+-			if (!isCancellationError(error)) {
+-				this.logService.error('[aiHub] failed to handle drawer message', error);
+-			}
+-		}
+-	}
+-
+-	private async reloadAfterExtensionChange(message: string): Promise<void> {
+-		this.notificationService.info(message);
+-		await this.close();
+-		await this.commandService.executeCommand('workbench.action.reloadWindow');
+-	}
+-
+-	override dispose(): void {
+-		void this.gatewayModel?.setVisible(false);
+-		super.dispose();
+-	}
+-}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+index 5b2db198..a8e5fb80 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
+@@ -3,82 +3,30 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
+-import { RunOnceScheduler, timeout } from '../../../../base/common/async.js';
+ import { Disposable } from '../../../../base/common/lifecycle.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+-import { ICommandService } from '../../../../platform/commands/common/commands.js';
+-import { ILogService } from '../../../../platform/log/common/log.js';
+-import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+-import { ViewContainerLocation } from '../../../common/views.js';
+-import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+-import { IViewsService } from '../../../services/views/common/viewsService.js';
+-import { AI_HUB_AGENT_MODE_CLASS, AI_HUB_EDIT_CHAT_MODE_CLASS, AiHubMode, AiHubProvider, BOLD_FRONTEND_ACTIVE_CLASS, CLAUDE_EXTENSION_ID, CODEX_EXTENSION_ID, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
+-
+-const AI_HUB_LAYOUT_STORAGE_KEY = 'aiHub.editModeLayout';
+-const CLAUDE_AGENT_CONTAINER_IDS = ['claude-sidebar-secondary', 'claude-sidebar'];
+-const CODEX_AGENT_CONTAINER_IDS = ['codexSecondaryViewContainer', 'codexViewContainer'];
+-const CLAUDE_AGENT_VIEW_IDS = ['claudeVSCodeSidebarSecondary', 'claudeVSCodeSidebar'];
+-const CODEX_AGENT_VIEW_IDS = ['chatgpt.sidebarSecondaryView', 'chatgpt.sidebarView'];
+-const AGENT_SURFACE_RETRY_COUNT = 50;
+-const AGENT_SURFACE_RETRY_DELAY = 100;
+-const ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS = 'bold-agent-webview-portal';
+-
+-type AiHubAgentMode = Exclude<AiHubMode, 'edit'>;
+-type AgentSurfacePresentation = 'editChat' | 'agent';
+-
+-interface IAiHubLayoutSnapshot {
+-	readonly activityBarVisible: boolean;
+-	readonly sideBarVisible: boolean;
+-	readonly sideBarContainerId?: string;
+-	readonly auxiliaryBarVisible: boolean;
+-	readonly auxiliaryBarContainerId?: string;
+-	readonly panelVisible: boolean;
+-	readonly editorVisible: boolean;
+-}
+-
++import { AI_HUB_AGENT_MODE_CLASS, AiHubMode, AiHubProvider, BOLD_FRONTEND_ACTIVE_CLASS, IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
++
++/**
++ * Pure Bold shell mode state.
++ *
++ * This controller intentionally does not open VS Code view containers, panels,
++ * command palettes, or extension ViewPanes. Agent surfaces are rendered by the
++ * Bold frontend itself.
++ */
+ export class AiHubModeController extends Disposable implements IAiHubModeController {
+ 
+ 	declare readonly _serviceBrand: undefined;
+ 
+ 	private currentMode: AiHubMode = 'edit';
+ 	private editChatProvider: AiHubProvider = 'claude';
+-	private surfaceGeneration = 0;
+ 	private initialization: Promise<void> | undefined;
+ 	private modeTransition: Promise<void> = Promise.resolve();
+-	private applyingLayout = false;
+-	private enforcementSuspended = false;
+-	private readonly enforcementScheduler = this._register(new RunOnceScheduler(() => void this.enforceAgentLayout(), 0));
+ 
+ 	constructor(
+ 		@IAiConfigService private readonly aiConfigService: IAiConfigService,
+-		@IStorageService private readonly storageService: IStorageService,
+-		@ICommandService private readonly commandService: ICommandService,
+-		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+-		@IViewsService private readonly viewsService: IViewsService,
+-		@ILogService private readonly logService: ILogService,
+ 	) {
+ 		super();
+-
+-		this._register(this.layoutService.onDidChangePartVisibility(event => {
+-			const presentation = this.getSurfacePresentation();
+-			if ((event.visible && this.isForbiddenPart(event.partId, presentation))
+-				|| (presentation === 'editChat' && event.partId === Parts.EDITOR_PART && !event.visible)) {
+-				this.enforcementScheduler.schedule();
+-			}
+-		}));
+-		this._register(this.layoutService.onDidChangeAuxiliaryBarMaximized(() => {
+-			this.enforcementScheduler.schedule();
+-		}));
+-		this._register(this.viewsService.onDidChangeViewContainerVisibility(event => {
+-			if (event.visible && !this.getAgentContainerIds(this.getActiveAgentMode()).includes(event.id)) {
+-				this.enforcementScheduler.schedule();
+-			}
+-		}));
+-		this._register(this.viewsService.onDidChangeViewVisibility(event => {
+-			if (this.getAgentViewIds(this.getActiveAgentMode()).includes(event.id) && !event.visible) {
+-				this.enforcementScheduler.schedule();
+-			}
+-		}));
+ 	}
+ 
+ 	get mode(): AiHubMode {
+@@ -96,380 +44,46 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		const state = await this.aiConfigService.getState();
+ 		this.currentMode = state.mode;
+ 		this.editChatProvider = state.editChatProvider;
+-		// Migrate old profiles that persisted one renderer as disabled. Both
+-		// extensions remain resident so subsequent switches are view-only.
+ 		await this.aiConfigService.setMode(state.mode);
+-		this.applyingLayout = true;
+-		try {
+-			await this.applyModeLayout(state.mode);
+-		} catch (error) {
+-			if (state.mode === 'edit') {
+-				throw error;
+-			}
+-			this.logService.warn('[aiHub] stored agent mode was unavailable; falling back to edit mode', error);
+-			this.currentMode = 'edit';
+-			await this.aiConfigService.setMode('edit');
+-			await this.applyModeLayout('edit');
+-		} finally {
+-			this.applyingLayout = false;
+-		}
+-		this.enforcementScheduler.schedule();
++		this.applyShellClasses();
+ 	}
+ 
+ 	setMode(mode: AiHubMode): Promise<void> {
+-		const transition = this.modeTransition.then(() => this.doSetMode(mode));
+-		this.modeTransition = transition.then(() => undefined, () => undefined);
+-		return transition;
+-	}
+-
+-	private async doSetMode(mode: AiHubMode): Promise<void> {
+-		await this.initialize();
+-		const previousMode = this.currentMode;
+-		if (mode === previousMode) {
+-			this.enforcementScheduler.schedule();
+-			return;
+-		}
+-
+-		if (previousMode === 'edit' && mode !== 'edit' && !this.readLayoutSnapshot()) {
+-			this.storageService.store(AI_HUB_LAYOUT_STORAGE_KEY, JSON.stringify(this.captureEditLayout()), StorageScope.PROFILE, StorageTarget.USER);
+-		}
+-
+-		this.applyingLayout = true;
+-		try {
++		const transition = this.modeTransition.then(async () => {
++			await this.initialize();
++			if (mode === this.currentMode) {
++				this.applyShellClasses();
++				return;
++			}
+ 			this.currentMode = mode;
+ 			await this.aiConfigService.setMode(mode);
+-			await this.applyModeLayout(mode);
+-		} catch (error) {
+-			this.currentMode = previousMode;
+-			try {
+-				await this.aiConfigService.setMode(previousMode);
+-				await this.applyModeLayout(previousMode);
+-			} catch (rollbackError) {
+-				this.logService.warn('[aiHub] failed to restore the previous mode after a transition error', rollbackError);
+-			}
+-			throw error;
+-		} finally {
+-			this.applyingLayout = false;
+-		}
+-
+-		this.enforcementScheduler.schedule();
+-	}
+-
+-	setEditChatProvider(provider: AiHubProvider): Promise<void> {
+-		const transition = this.modeTransition.then(() => this.doSetEditChatProvider(provider));
++			this.applyShellClasses();
++		});
+ 		this.modeTransition = transition.then(() => undefined, () => undefined);
+ 		return transition;
+ 	}
+ 
+-	private async doSetEditChatProvider(provider: AiHubProvider): Promise<void> {
+-		await this.initialize();
+-		const previousProvider = this.editChatProvider;
+-		if (provider === previousProvider) {
+-			this.enforcementScheduler.schedule();
+-			return;
+-		}
+-
+-		this.applyingLayout = true;
+-		try {
+-			this.editChatProvider = provider;
+-			await this.aiConfigService.setEditChatProvider(provider);
+-			if (this.currentMode === 'edit') {
+-				await this.applyModeLayout('edit');
+-			}
+-		} catch (error) {
+-			this.editChatProvider = previousProvider;
+-			try {
+-				await this.aiConfigService.setEditChatProvider(previousProvider);
+-				if (this.currentMode === 'edit') {
+-					await this.applyModeLayout('edit');
+-				}
+-			} catch (rollbackError) {
+-				this.logService.warn('[aiHub] failed to restore the previous editor chat provider', rollbackError);
+-			}
+-			throw error;
+-		} finally {
+-			this.applyingLayout = false;
+-		}
+-
+-		this.enforcementScheduler.schedule();
+-	}
+-
+-	private getSurfacePresentation(mode: AiHubMode = this.currentMode): AgentSurfacePresentation {
+-		return mode === 'edit' ? 'editChat' : 'agent';
+-	}
+-
+-	private getActiveAgentMode(mode: AiHubMode = this.currentMode): AiHubAgentMode {
+-		if (mode !== 'edit') {
+-			return mode;
+-		}
+-		return this.editChatProvider === 'claude' ? 'claudeAgent' : 'codexAgent';
+-	}
+-
+-	private getAgentContainerIds(mode: AiHubAgentMode): readonly string[] {
+-		if (mode === 'claudeAgent') {
+-			return CLAUDE_AGENT_CONTAINER_IDS;
+-		}
+-		if (mode === 'codexAgent') {
+-			return CODEX_AGENT_CONTAINER_IDS;
+-		}
+-		return [];
+-	}
+-
+-	private getAgentViewIds(mode: AiHubAgentMode): readonly string[] {
+-		if (mode === 'claudeAgent') {
+-			return CLAUDE_AGENT_VIEW_IDS;
+-		}
+-		if (mode === 'codexAgent') {
+-			return CODEX_AGENT_VIEW_IDS;
+-		}
+-		return [];
+-	}
+-
+-	private captureEditLayout(): IAiHubLayoutSnapshot {
+-		return {
+-			activityBarVisible: this.layoutService.isVisible(Parts.ACTIVITYBAR_PART),
+-			sideBarVisible: this.layoutService.isVisible(Parts.SIDEBAR_PART),
+-			sideBarContainerId: this.viewsService.getVisibleViewContainer(ViewContainerLocation.Sidebar)?.id,
+-			auxiliaryBarVisible: this.layoutService.isVisible(Parts.AUXILIARYBAR_PART),
+-			auxiliaryBarContainerId: this.viewsService.getVisibleViewContainer(ViewContainerLocation.AuxiliaryBar)?.id,
+-			panelVisible: this.layoutService.isVisible(Parts.PANEL_PART),
+-			editorVisible: this.layoutService.isVisible(Parts.EDITOR_PART, mainWindow),
+-		};
+-	}
+-
+-	private readLayoutSnapshot(): IAiHubLayoutSnapshot | undefined {
+-		const raw = this.storageService.get(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
+-		if (!raw) {
+-			return undefined;
+-		}
+-
+-		try {
+-			return JSON.parse(raw) as IAiHubLayoutSnapshot;
+-		} catch {
+-			return undefined;
+-		}
+-	}
+-
+-	private async openFirstAvailableViewContainer(containerIds: readonly string[], focus: boolean): Promise<boolean> {
+-		for (const id of containerIds) {
+-			try {
+-				const paneComposite = await this.viewsService.openViewContainer(id, focus);
+-				if (paneComposite) {
+-					return true;
+-				}
+-			} catch {
+-				// Agent containers can be conditional; try the next known location.
+-			}
+-		}
+-		return false;
+-	}
+-
+-	private async openFirstAvailableView(viewIds: readonly string[], focus: boolean): Promise<boolean> {
+-		for (const id of viewIds) {
+-			try {
+-				const view = await this.viewsService.openView(id, focus);
+-				if (view) {
+-					return true;
+-				}
+-			} catch {
+-				// The extension may still be registering its Webview provider.
+-			}
+-		}
+-		return false;
+-	}
+-
+-	private async prepareAgentSurface(presentation: AgentSurfacePresentation): Promise<void> {
+-		this.setSurfacePresentation(presentation);
+-		this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+-		this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+-		this.layoutService.setAuxiliaryBarMaximized(presentation === 'agent');
+-		this.hideForbiddenParts(presentation);
+-		if (presentation === 'editChat') {
+-			this.storageService.remove(AI_HUB_LAYOUT_STORAGE_KEY, StorageScope.PROFILE);
+-		}
+-		this.layoutService.layout();
+-	}
+-
+-	private async applyAgentLayout(mode: AiHubAgentMode, presentation: AgentSurfacePresentation, generation: number): Promise<void> {
+-		await this.prepareAgentSurface(presentation);
+-		let commandOpened = false;
+-		const focus = presentation === 'agent';
+-
+-		for (let attempt = 0; attempt < AGENT_SURFACE_RETRY_COUNT && this.isSurfaceRequestCurrent(mode, presentation, generation); attempt++) {
+-			await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), focus);
+-			await this.openFirstAvailableView(this.getAgentViewIds(mode), focus);
+-			if (this.isAgentSurfaceReady(mode, presentation)) {
+-				this.hideForbiddenParts(presentation);
+-				this.layoutService.layout();
+-				return;
+-			}
+-
+-			if (!commandOpened) {
+-				try {
+-					await this.commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
+-					commandOpened = true;
+-				} catch (error) {
+-					if (attempt === AGENT_SURFACE_RETRY_COUNT - 1) {
+-						this.logService.warn('[aiHub] failed to open agent sidebar via extension command', error);
+-					}
+-				}
+-			}
+-
+-			await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), focus);
+-			await this.openFirstAvailableView(this.getAgentViewIds(mode), focus);
+-			if (this.isAgentSurfaceReady(mode, presentation)) {
+-				this.hideForbiddenParts(presentation);
+-				this.layoutService.layout();
++	setEditChatProvider(provider: AiHubProvider): Promise<void> {
++		const transition = this.modeTransition.then(async () => {
++			await this.initialize();
++			if (provider === this.editChatProvider) {
+ 				return;
+ 			}
+-			await timeout(AGENT_SURFACE_RETRY_DELAY);
+-		}
+-
+-		if (!this.isSurfaceRequestCurrent(mode, presentation, generation)) {
+-			return;
+-		}
+-
+-		this.clearAgentPortals();
+-		throw new Error(`The ${mode} extension view did not become visible.`);
+-	}
+-
+-	private async applyModeLayout(mode: AiHubMode): Promise<void> {
+-		const presentation = this.getSurfacePresentation(mode);
+-		const agentMode = this.getActiveAgentMode(mode);
+-		const generation = ++this.surfaceGeneration;
+-		await this.applyAgentLayout(agentMode, presentation, generation);
+-	}
+-
+-	private isSurfaceRequestCurrent(mode: AiHubAgentMode, presentation: AgentSurfacePresentation, generation: number): boolean {
+-		return generation === this.surfaceGeneration
+-			&& mode === this.getActiveAgentMode()
+-			&& presentation === this.getSurfacePresentation();
+-	}
+-
+-	private isAgentSurfaceReady(mode: AiHubAgentMode, presentation: AgentSurfacePresentation): boolean {
+-		const extensionId = mode === 'claudeAgent' ? CLAUDE_EXTENSION_ID : CODEX_EXTENSION_ID;
+-		const webviewFrame = Array.from(mainWindow.document.querySelectorAll<HTMLIFrameElement>('iframe.webview.ready')).find(frame => {
+-			const overlay = frame.parentElement;
+-			return frame.src.includes(`extensionId=${extensionId}`)
+-				&& overlay?.style.visibility === 'visible'
+-				&& this.isInViewport(frame);
+-		});
+-		const containerMounted = this.getAgentContainerIds(mode).some(id => {
+-			const container = mainWindow.document.getElementById(`workbench.view.extension.${id}`);
+-			return !!container && this.isInViewport(container);
++			this.editChatProvider = provider;
++			await this.aiConfigService.setEditChatProvider(provider);
++			this.applyShellClasses();
+ 		});
+-		const portal = webviewFrame?.parentElement?.parentElement;
+-		const workbench = mainWindow.document.querySelector('.monaco-workbench');
+-		if (webviewFrame && containerMounted && portal?.parentElement === workbench) {
+-			this.arrangeAgentContainer(mode, presentation);
+-			this.activateAgentPortal(portal);
+-			return true;
+-		}
+-		return false;
+-	}
+-
+-	private isInViewport(element: HTMLElement): boolean {
+-		const bounds = element.getBoundingClientRect();
+-		return bounds.width > 0
+-			&& bounds.height > 0
+-			&& bounds.right > 0
+-			&& bounds.bottom > 0
+-			&& bounds.left < mainWindow.innerWidth
+-			&& bounds.top < mainWindow.innerHeight
+-			&& mainWindow.getComputedStyle(element).display !== 'none';
+-	}
+-
+-	private activateAgentPortal(portal: HTMLElement): void {
+-		for (const activePortal of mainWindow.document.querySelectorAll<HTMLElement>(`.${ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS}`)) {
+-			if (activePortal !== portal) {
+-				activePortal.classList.remove(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
+-			}
+-		}
+-		portal.classList.add(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
+-	}
+-
+-	private clearAgentPortals(): void {
+-		for (const portal of mainWindow.document.querySelectorAll<HTMLElement>(`.${ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS}`)) {
+-			portal.classList.remove(ACTIVE_AGENT_WEBVIEW_PORTAL_CLASS);
+-		}
+-	}
+-
+-	private arrangeAgentContainer(mode: AiHubAgentMode, presentation: AgentSurfacePresentation): boolean {
+-		const agentContainerIds = new Set(this.getAgentContainerIds(mode));
+-		const sideBarContainerId = this.viewsService.getVisibleViewContainer(ViewContainerLocation.Sidebar)?.id;
+-		const auxiliaryBarContainerId = this.viewsService.getVisibleViewContainer(ViewContainerLocation.AuxiliaryBar)?.id;
+-
+-		if (sideBarContainerId && agentContainerIds.has(sideBarContainerId)) {
+-			this.layoutService.setAuxiliaryBarMaximized(false);
+-			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
+-			this.layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
+-			this.hideForbiddenParts(presentation);
+-			return true;
+-		}
+-
+-		if (auxiliaryBarContainerId && agentContainerIds.has(auxiliaryBarContainerId)) {
+-			this.layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+-			this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART);
+-			this.layoutService.setAuxiliaryBarMaximized(presentation === 'agent');
+-			this.hideForbiddenParts(presentation);
+-			return true;
+-		}
+-
+-		return false;
+-	}
+-
+-	setEnforcementSuspended(suspended: boolean): void {
+-		this.enforcementSuspended = suspended;
+-		if (!suspended) {
+-			this.enforcementScheduler.schedule();
+-		}
+-	}
+-
+-	private async enforceAgentLayout(): Promise<void> {
+-		if (this.enforcementSuspended) {
+-			return;
+-		}
+-		if (this.applyingLayout) {
+-			this.enforcementScheduler.schedule(16);
+-			return;
+-		}
+-
+-		this.applyingLayout = true;
+-		try {
+-			const topMode = this.currentMode;
+-			const mode = this.getActiveAgentMode(topMode);
+-			const presentation = this.getSurfacePresentation(topMode);
+-			if (!this.isAgentSurfaceReady(mode, presentation)) {
+-				await this.applyModeLayout(topMode);
+-			}
+-			if (this.currentMode === topMode && mode === this.getActiveAgentMode()) {
+-				this.hideForbiddenParts(presentation);
+-				this.layoutService.layout();
+-			}
+-		} catch (error) {
+-			this.logService.warn('[aiHub] failed to restore the active agent surface', error);
+-		} finally {
+-			this.applyingLayout = false;
+-		}
+-	}
+-
+-	private isForbiddenPart(partId: string, presentation: AgentSurfacePresentation): boolean {
+-		return partId === Parts.ACTIVITYBAR_PART
+-			|| partId === Parts.PANEL_PART
+-			|| (presentation === 'agent' && partId === Parts.EDITOR_PART);
++		this.modeTransition = transition.then(() => undefined, () => undefined);
++		return transition;
+ 	}
+ 
+-	private hideForbiddenParts(presentation: AgentSurfacePresentation): void {
+-		this.layoutService.setPartHidden(true, Parts.ACTIVITYBAR_PART);
+-		this.layoutService.setPartHidden(true, Parts.PANEL_PART);
+-		this.layoutService.setPartHidden(presentation === 'agent', Parts.EDITOR_PART);
++	setEnforcementSuspended(_suspended: boolean): void {
++		// Kept as a compatibility no-op for the bridge. There is no native
++		// workbench layout enforcement left to suspend.
+ 	}
+ 
+-	private setSurfacePresentation(presentation: AgentSurfacePresentation): void {
+-		mainWindow.document.body.classList.toggle(AI_HUB_AGENT_MODE_CLASS, presentation === 'agent');
+-		mainWindow.document.body.classList.toggle(AI_HUB_EDIT_CHAT_MODE_CLASS, presentation === 'editChat');
+-		// The Bold shell remains the window frontend in every mode. Agent modes only contribute
+-		// their extension-owned Webview surface inside the shell's content viewport.
++	private applyShellClasses(): void {
+ 		mainWindow.document.body.classList.add(BOLD_FRONTEND_ACTIVE_CLASS);
++		mainWindow.document.body.classList.toggle(AI_HUB_AGENT_MODE_CLASS, this.currentMode !== 'edit');
+ 	}
+ }
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+index 51b28ccf..e579f31d 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
+@@ -12,7 +12,6 @@ export const AI_HUB_OPEN_COMMAND_ID = 'aiHub.open';
+ export const AI_GATEWAY_OPEN_COMMAND_ID = 'aiGateway.open';
+ 
+ export const AI_HUB_AGENT_MODE_CLASS = 'ai-hub-agent-mode';
+-export const AI_HUB_EDIT_CHAT_MODE_CLASS = 'ai-hub-edit-chat-mode';
+ export const BOLD_FRONTEND_BOOTSTRAP_CLASS = 'bold-frontend-bootstrapping';
+ export const BOLD_FRONTEND_ACTIVE_CLASS = 'bold-independent-frontend';
+ 
+@@ -52,26 +51,9 @@ export interface IAiHubModeController {
+ 	initialize(): Promise<void>;
+ 	setMode(mode: AiHubMode): Promise<void>;
+ 	setEditChatProvider(provider: AiHubProvider): Promise<void>;
+-
+-	/**
+-	 * Suspends the layout enforcement that otherwise reclaims the sidebar/auxiliary bar for
+-	 * the active agent's view container whenever some other container becomes visible there
+-	 * (e.g. while the native Search view is temporarily shown on top of it). Resuming
+-	 * re-triggers enforcement so the agent's container is restored.
+-	 */
+ 	setEnforcementSuspended(suspended: boolean): void;
+ }
+ 
+-export const IAiHubDrawerService = createDecorator<IAiHubDrawerService>('aiHubDrawerService');
+-
+-export interface IAiHubDrawerService {
+-	readonly _serviceBrand: undefined;
+-
+-	toggleSettings(): Promise<void>;
+-	toggleGateway(): Promise<void>;
+-	close(): Promise<void>;
+-}
+-
+ export interface IAiConfigService {
+ 	readonly _serviceBrand: undefined;
+ 
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubViewPane.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubViewPane.ts
+deleted file mode 100644
+index 14a4c22c..00000000
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubViewPane.ts
++++ /dev/null
+@@ -1,58 +0,0 @@
+-/*---------------------------------------------------------------------------------------------
+- *  Copyright (c) Microsoft Corporation. All rights reserved.
+- *  Licensed under the MIT License. See License.txt in the project root for license information.
+- *--------------------------------------------------------------------------------------------*/
+-
+-import { ViewPane, IViewPaneOptions } from '../../../browser/parts/views/viewPane.js';
+-import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+-import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+-import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+-import { IViewDescriptorService } from '../../../common/views.js';
+-import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+-import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+-import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+-import { IHoverService } from '../../../../platform/hover/browser/hover.js';
+-import { IAccessibleViewInformationService } from '../../../services/accessibility/common/accessibleViewInformationService.js';
+-import { ICommandService } from '../../../../platform/commands/common/commands.js';
+-import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+-import { AI_HUB_OPEN_COMMAND_ID } from './aiHubTypes.js';
+-
+-/**
+- * This view renders nothing. Its only purpose is to be the thing the activity bar icon
+- * opens, so we can immediately redirect that click into opening the full AI Hub editor
+- * and collapse the sidebar back down — VS Code's activity bar has no "icon runs a command
+- * directly" contribution point for a plain composite bar entry, only view containers, so
+- * this view is the minimal-footprint way to get a single-click-opens-an-editor icon there.
+- */
+-export class AiHubViewPane extends ViewPane {
+-
+-	constructor(
+-		options: IViewPaneOptions,
+-		@IKeybindingService keybindingService: IKeybindingService,
+-		@IContextMenuService contextMenuService: IContextMenuService,
+-		@IConfigurationService configurationService: IConfigurationService,
+-		@IContextKeyService contextKeyService: IContextKeyService,
+-		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
+-		@IInstantiationService instantiationService: IInstantiationService,
+-		@IOpenerService openerService: IOpenerService,
+-		@IThemeService themeService: IThemeService,
+-		@IHoverService hoverService: IHoverService,
+-		@ICommandService private readonly commandService: ICommandService,
+-		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+-		accessibleViewInformationService?: IAccessibleViewInformationService,
+-	) {
+-		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService, accessibleViewInformationService);
+-	}
+-
+-	override focus(): void {
+-		super.focus();
+-		this.redirectToEditor();
+-	}
+-
+-	private redirectToEditor(): void {
+-		void this.commandService.executeCommand(AI_HUB_OPEN_COMMAND_ID);
+-		// Defer so we don't fight the composite bar's own reveal-sidebar handling for this click.
+-		queueMicrotask(() => this.layoutService.setPartHidden(true, Parts.SIDEBAR_PART));
+-	}
+-}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+index c2e95dcf..f9b9a7c2 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -422,7 +422,6 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		}
+ 		this.searchActive = active;
+ 		this.modeController.setEnforcementSuspended(active);
+-		mainWindow.document.body.classList.toggle('bold-search-active', active);
+ 	}
+ 
+ 	private relativeWorkspacePath(root: URI, resource: URI): string {
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
+deleted file mode 100644
+index 73746ee3..00000000
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/aiHubDrawer.css
++++ /dev/null
+@@ -1,153 +0,0 @@
+-/*---------------------------------------------------------------------------------------------
+- *  Copyright (c) Microsoft Corporation. All rights reserved.
+- *  Licensed under the MIT License. See License.txt in the project root for license information.
+- *--------------------------------------------------------------------------------------------*/
+-
+-body.ai-hub-agent-mode .monaco-workbench .part.sidebar > .title,
+-body.ai-hub-agent-mode .monaco-workbench .part.auxiliarybar > .title {
+-	display: none !important;
+-}
+-
+-body.ai-hub-agent-mode .monaco-workbench .part.sidebar > .content,
+-body.ai-hub-agent-mode .monaco-workbench .part.auxiliarybar > .content {
+-	top: 0 !important;
+-	height: 100% !important;
+-}
+-
+-.ai-hub-drawer {
+-	position: absolute;
+-	right: 10px;
+-	bottom: 10px;
+-	z-index: 200;
+-	display: flex;
+-	width: min(720px, calc(100% - 40px));
+-	min-width: min(400px, calc(100% - 20px));
+-	flex-direction: column;
+-	overflow: hidden;
+-	color: var(--vscode-foreground);
+-	background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, transparent);
+-	border: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+-	border-radius: var(--vscode-cornerRadius-xLarge);
+-	box-shadow: 0 24px 72px color-mix(in srgb, var(--vscode-widget-shadow) 68%, transparent);
+-	transform: translateX(calc(100% + 24px)) scale(.985);
+-	transform-origin: right center;
+-	visibility: hidden;
+-	pointer-events: none;
+-	transition: transform 220ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 220ms;
+-	backdrop-filter: blur(22px) saturate(1.15);
+-}
+-
+-.ai-hub-drawer.ai-hub-drawer-visible {
+-	visibility: visible;
+-}
+-
+-.ai-hub-drawer.ai-hub-drawer-open {
+-	transform: translateX(0) scale(1);
+-	pointer-events: auto;
+-	transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+-}
+-
+-.ai-hub-drawer-header {
+-	position: relative;
+-	display: flex;
+-	min-height: 58px;
+-	align-items: center;
+-	justify-content: space-between;
+-	box-sizing: border-box;
+-	padding: 0 12px 0 20px;
+-	background: linear-gradient(135deg, color-mix(in srgb, var(--vscode-button-background) 10%, transparent), transparent 46%);
+-	border-bottom: var(--vscode-strokeThickness) solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-.ai-hub-drawer-header::before {
+-	width: 7px;
+-	height: 7px;
+-	margin-right: 10px;
+-	flex: 0 0 auto;
+-	content: '';
+-	background: var(--vscode-button-background);
+-	border-radius: var(--vscode-cornerRadius-circle);
+-	box-shadow: 0 0 0 4px color-mix(in srgb, var(--vscode-button-background) 16%, transparent);
+-}
+-
+-.ai-hub-drawer-title {
+-	overflow: hidden;
+-	flex: 1;
+-	font-size: 14px;
+-	font-weight: var(--vscode-agents-fontWeight-semiBold);
+-	letter-spacing: .01em;
+-	text-overflow: ellipsis;
+-	white-space: nowrap;
+-}
+-
+-.ai-hub-drawer-close {
+-	width: 32px;
+-	height: 32px;
+-	padding: 0;
+-	color: var(--vscode-icon-foreground);
+-	background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 42%, transparent);
+-	border: var(--vscode-strokeThickness) solid transparent;
+-	border-radius: var(--vscode-cornerRadius-large);
+-	cursor: pointer;
+-	transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+-}
+-
+-.ai-hub-drawer-close:hover {
+-	background: var(--vscode-toolbar-hoverBackground);
+-	border-color: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+-}
+-
+-.ai-hub-drawer-close:active {
+-	transform: scale(.94);
+-}
+-
+-.ai-hub-drawer-close:focus-visible {
+-	outline: 1px solid var(--vscode-focusBorder);
+-	outline-offset: -1px;
+-}
+-
+-.ai-hub-drawer-body,
+-.ai-hub-drawer-content {
+-	position: relative;
+-	min-width: 0;
+-	min-height: 0;
+-	flex: 1;
+-}
+-
+-.ai-hub-drawer-body {
+-	display: flex;
+-	overflow: hidden;
+-	background:
+-		radial-gradient(circle at 100% 0, color-mix(in srgb, var(--vscode-button-background) 9%, transparent), transparent 34%),
+-		var(--vscode-editor-background);
+-}
+-
+-.ai-hub-drawer-content {
+-	display: none;
+-	width: 100%;
+-	height: 100%;
+-}
+-
+-.ai-hub-drawer-content.active {
+-	display: block;
+-}
+-
+-@media (max-width: 520px) {
+-	.ai-hub-drawer {
+-		right: 0;
+-		bottom: 0;
+-		width: 100%;
+-		min-width: 0;
+-		border-right: 0;
+-		border-bottom: 0;
+-		border-left: 0;
+-		border-radius: 0;
+-	}
+-}
+-
+-@media (prefers-reduced-motion: reduce) {
+-	.ai-hub-drawer,
+-	.ai-hub-drawer.ai-hub-drawer-open {
+-		transition-duration: 0s;
+-	}
+-}
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index 79e92a04..06656fb7 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -191,55 +191,6 @@ body.bold-independent-frontend .monaco-workbench {
+ 	transition: opacity 140ms ease;
+ }
+ 
+-body.bold-independent-frontend:not(.ai-hub-agent-mode):not(.ai-hub-edit-chat-mode) .monaco-workbench {
+-	visibility: hidden !important;
+-	opacity: 0 !important;
+-	pointer-events: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench {
+-	background: transparent !important;
+-	visibility: visible !important;
+-	opacity: 1 !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > *,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > * {
+-	visibility: hidden !important;
+-	pointer-events: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .monaco-grid-view,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .monaco-grid-view {
+-	opacity: 0 !important;
+-	visibility: visible !important;
+-	pointer-events: none !important;
+-}
+-
+-body.bold-independent-frontend .monaco-workbench .part.titlebar,
+-body.bold-independent-frontend .monaco-workbench .part.activitybar,
+-body.bold-independent-frontend .monaco-workbench .part.statusbar {
+-	display: none !important;
+-}
+-
+-body.bold-independent-frontend .monaco-workbench > .notifications-toasts,
+-body.bold-independent-frontend .monaco-workbench > .notifications-center,
+-body.bold-independent-frontend .monaco-workbench .part.banner,
+-body.bold-independent-frontend .monaco-workbench .monaco-sash,
+-body.bold-independent-frontend .monaco-workbench .quick-input-widget,
+-body.bold-independent-frontend .monaco-workbench .context-view,
+-body.bold-independent-frontend .monaco-workbench .monaco-dialog-box,
+-body.bold-independent-frontend .monaco-workbench .monaco-dialog-modal-block,
+-body.bold-independent-frontend .monaco-workbench .dialog-modal-block {
+-	display: none !important;
+-	pointer-events: none !important;
+-}
+-
+-body.bold-independent-frontend .monaco-workbench .editor-group-watermark-wrapper {
+-	display: none !important;
+-}
+-
+ .bold-frontend {
+ 	position: fixed;
+ 	z-index: 800;
+@@ -262,102 +213,6 @@ body.ai-hub-agent-mode {
+ 	display: none;
+ }
+ 
+-.bold-frontend.is-agent-mode .bold-frontend__content {
+-	display: none;
+-}
+-
+-.bold-frontend.is-agent-mode .bold-frontend__editor,
+-.bold-frontend.is-agent-mode .bold-frontend__editor-empty {
+-	display: none;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.editor,
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.panel {
+-	display: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar,
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar {
+-	border: 0 !important;
+-	background: transparent !important;
+-	opacity: 0 !important;
+-	pointer-events: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty),
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty) {
+-	position: fixed !important;
+-	top: var(--bold-topbar-height) !important;
+-	right: 10px !important;
+-	bottom: calc(var(--bold-statusbar-height) + 8px) !important;
+-	height: auto !important;
+-	min-width: 0 !important;
+-	min-height: 0 !important;
+-	box-shadow: 0 16px 48px color-mix(in srgb, #000 22%, transparent);
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty) {
+-	left: var(--bold-shell-left) !important;
+-	width: auto !important;
+-}
+-
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar:not(.empty),
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar:not(.empty) {
+-	left: auto !important;
+-	width: var(--bold-chat-width) !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.sidebar.empty,
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar.empty,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.sidebar.empty,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .part.auxiliarybar.empty {
+-	display: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .content,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .content {
+-	position: absolute !important;
+-	top: 0 !important;
+-	right: 0 !important;
+-	bottom: 0 !important;
+-	left: 0 !important;
+-	width: 100% !important;
+-	height: 100% !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .composite.title,
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench .pane-composite-part .pane-header,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .pane-composite-part > .composite.title,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench .pane-composite-part .pane-header {
+-	display: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal {
+-	position: fixed !important;
+-	z-index: 10 !important;
+-	inset: 0 !important;
+-	width: 100vw !important;
+-	height: 100vh !important;
+-	overflow: visible !important;
+-	clip: auto !important;
+-	visibility: visible !important;
+-	pointer-events: none !important;
+-}
+-
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div,
+-body.ai-hub-agent-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div > iframe.webview.ready,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div,
+-body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-agent-webview-portal > div > iframe.webview.ready {
+-	z-index: 11 !important;
+-	pointer-events: auto !important;
+-}
+-
+ .bold-frontend button {
+ 	color: inherit;
+ 	font: inherit;
+@@ -426,33 +281,28 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 	scrollbar-width: thin;
+ }
+ 
+-.bold-frontend *::-webkit-scrollbar,
+-body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar {
++.bold-frontend *::-webkit-scrollbar {
+ 	width: 9px;
+ 	height: 9px;
+ }
+ 
+-.bold-frontend *::-webkit-scrollbar-track,
+-body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-track {
++.bold-frontend *::-webkit-scrollbar-track {
+ 	background: transparent;
+ }
+ 
+-.bold-frontend *::-webkit-scrollbar-thumb,
+-body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-thumb {
++.bold-frontend *::-webkit-scrollbar-thumb {
+ 	border: 2px solid transparent;
+ 	border-radius: 999px;
+ 	background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+ 	background-clip: padding-box;
+ }
+ 
+-.bold-frontend *::-webkit-scrollbar-thumb:hover,
+-body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-thumb:hover {
++.bold-frontend *::-webkit-scrollbar-thumb:hover {
+ 	background: color-mix(in srgb, var(--vscode-foreground) 34%, transparent);
+ 	background-clip: padding-box;
+ }
+ 
+-.bold-frontend *::-webkit-scrollbar-corner,
+-body.bold-independent-frontend.bold-search-active .monaco-workbench .part.sidebar *::-webkit-scrollbar-corner {
++.bold-frontend *::-webkit-scrollbar-corner {
+ 	background: transparent;
+ }
+ 
+@@ -1143,7 +993,8 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	display: none;
+ }
+ 
+-.bold-frontend__editor-empty {
++.bold-frontend__editor-empty,
++.bold-frontend__agent-surface {
+ 	position: absolute;
+ 	inset: 0;
+ 	display: flex;
+@@ -1155,15 +1006,30 @@ body.ai-hub-edit-chat-mode .bold-frontend__content {
+ 	font-size: 12px;
+ }
+ 
+-.bold-frontend__editor-empty[hidden] {
++.bold-frontend__editor-empty[hidden],
++.bold-frontend__agent-surface[hidden] {
+ 	display: none;
+ }
+ 
+-.bold-frontend__editor-empty strong {
++.bold-frontend__editor-empty strong,
++.bold-frontend__agent-surface strong {
+ 	color: var(--vscode-foreground, #d7dce6);
+ 	font-size: 16px;
+ }
+ 
++.bold-frontend__agent-surface {
++	padding: 28px;
++	text-align: center;
++	background:
++		radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--vscode-focusBorder) 13%, transparent), transparent 32%),
++		linear-gradient(180deg, color-mix(in srgb, var(--vscode-editor-background) 98%, #0f1520), var(--vscode-editor-background));
++}
++
++.bold-frontend__agent-surface span:last-child {
++	max-width: 540px;
++	line-height: 1.7;
++}
++
+ .bold-frontend__transition {
+ 	position: absolute;
+ 	z-index: 5;
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+index 0bf9686c..3d8daa5f 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -55,6 +55,9 @@ export class BoldFrontendApp {
+ 	private readonly providerStatus: HTMLElement;
+ 	private readonly editorHost: HTMLElement;
+ 	private readonly emptyEditor: HTMLElement;
++	private readonly agentSurface: HTMLElement;
++	private readonly agentTitle: HTMLElement;
++	private readonly agentDetail: HTMLElement;
+ 	private readonly transitionOverlay: HTMLElement;
+ 	private readonly transitionTitle: HTMLElement;
+ 	private readonly transitionDetail: HTMLElement;
+@@ -201,6 +204,14 @@ export class BoldFrontendApp {
+ 			this.createElement('strong', undefined, 'Bold Code'),
+ 			this.createElement('span', undefined, '从左侧工作区打开文件，或按 ⌘N 新建草稿'),
+ 		);
++		this.agentSurface = this.createElement('section', 'bold-frontend__agent-surface');
++		this.agentSurface.hidden = true;
++		this.agentSurface.append(
++			this.createElement('span', 'bold-frontend__editor-mark', 'AI'),
++		);
++		this.agentTitle = this.createElement('strong', undefined, 'Bold Agent');
++		this.agentDetail = this.createElement('span', undefined, '原生 Agent 宿主已接管，不再加载 VS Code 原生视图。');
++		this.agentSurface.append(this.agentTitle, this.agentDetail);
+ 		this.transitionOverlay = this.createElement('section', 'bold-frontend__transition');
+ 		this.transitionOverlay.hidden = true;
+ 		this.transitionOverlay.inert = true;
+@@ -209,7 +220,7 @@ export class BoldFrontendApp {
+ 		this.transitionTitle = this.createElement('strong', undefined, '正在切换工作区');
+ 		this.transitionDetail = this.createElement('span', undefined, '正在准备内容视图…');
+ 		this.transitionOverlay.append(transitionSpinner, this.transitionTitle, this.transitionDetail);
+-		content.append(this.editorHost, this.emptyEditor, this.transitionOverlay);
++		content.append(this.editorHost, this.emptyEditor, this.agentSurface, this.transitionOverlay);
+ 
+ 		this.settingsDrawer = this.createElement('aside', 'bold-frontend__settings');
+ 		this.settingsDrawer.setAttribute('aria-hidden', 'true');
+@@ -360,6 +371,7 @@ export class BoldFrontendApp {
+ 		this.providerStatus.textContent = state.mode === 'edit'
+ 			? `右侧对话 · ${editChatName}`
+ 			: `Claude ${state.claudeEnabled ? '已启用' : '未启用'}  ·  Codex ${state.codexEnabled ? '已启用' : '未启用'}`;
++		this.renderAgentSurface(state);
+ 		this.renderDocumentTabs();
+ 
+ 		const workspaceSignature = state.workspaceRoots.map(root => `${root.name}:${root.uri}`).join('|');
+@@ -411,6 +423,24 @@ export class BoldFrontendApp {
+ 		this.renderTabs(tabs);
+ 	}
+ 
++	private renderAgentSurface(state: IBoldFrontendState): void {
++		const agentMode = state.mode !== 'edit';
++		this.agentSurface.hidden = !agentMode;
++		if (!agentMode) {
++			this.editorHost.hidden = !this.activeDocumentId;
++			this.emptyEditor.hidden = !!this.activeDocumentId;
++			return;
++		}
++		this.editorHost.hidden = true;
++		this.emptyEditor.hidden = true;
++		const agentName = state.mode === 'claudeAgent' ? 'Claude Code' : 'Codex';
++		const enabled = state.mode === 'claudeAgent' ? state.claudeEnabled : state.codexEnabled;
++		this.agentTitle.textContent = `${agentName} · Bold Native Host`;
++		this.agentDetail.textContent = enabled
++			? 'VS Code 原生视图已在代码层面切断。这里是 Bold 自绘 Agent 宿主，后续接入原生 Agent 会话 UI。'
++			: `${agentName} 当前未启用，请先在设置中配置。`;
++	}
++
+ 	private renderWorkspaceRoots(roots: readonly IBoldFrontendFileEntry[]): void {
+ 		this.workspaceTree.replaceChildren();
+ 		this.expandedFolders.clear();

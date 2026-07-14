@@ -781,7 +781,7 @@ index 7970c79..d15a6b6 100644
 -registerWorkbenchContribution2(ModernWorkbenchContribution.ID, ModernWorkbenchContribution, WorkbenchPhase.BlockStartup);
 +registerWorkbenchContribution2(BoldFrontendContribution.ID, BoldFrontendContribution, WorkbenchPhase.AfterRestored);
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
-index 5bcea80..b75f7fc 100644
+index 5bcea80..5b2db19 100644
 --- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubModeController.ts
 @@ -3,21 +3,28 @@
@@ -817,7 +817,7 @@ index 5bcea80..b75f7fc 100644
  
  interface IAiHubLayoutSnapshot {
  	readonly activityBarVisible: boolean;
-@@ -34,6 +41,8 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -34,16 +41,18 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  	declare readonly _serviceBrand: undefined;
  
  	private currentMode: AiHubMode = 'edit';
@@ -826,7 +826,10 @@ index 5bcea80..b75f7fc 100644
  	private initialization: Promise<void> | undefined;
  	private modeTransition: Promise<void> = Promise.resolve();
  	private applyingLayout = false;
-@@ -43,7 +52,6 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
++	private enforcementSuspended = false;
+ 	private readonly enforcementScheduler = this._register(new RunOnceScheduler(() => void this.enforceAgentLayout(), 0));
+ 
+ 	constructor(
  		@IAiConfigService private readonly aiConfigService: IAiConfigService,
  		@IStorageService private readonly storageService: IStorageService,
  		@ICommandService private readonly commandService: ICommandService,
@@ -834,7 +837,7 @@ index 5bcea80..b75f7fc 100644
  		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
  		@IViewsService private readonly viewsService: IViewsService,
  		@ILogService private readonly logService: ILogService,
-@@ -51,17 +59,22 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -51,17 +60,22 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  		super();
  
  		this._register(this.layoutService.onDidChangePartVisibility(event => {
@@ -861,7 +864,7 @@ index 5bcea80..b75f7fc 100644
  				this.enforcementScheduler.schedule();
  			}
  		}));
-@@ -81,10 +94,25 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -81,10 +95,25 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  	private async doInitialize(): Promise<void> {
  		const state = await this.aiConfigService.getState();
  		this.currentMode = state.mode;
@@ -890,7 +893,7 @@ index 5bcea80..b75f7fc 100644
  	}
  
  	setMode(mode: AiHubMode): Promise<void> {
-@@ -107,29 +135,76 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -107,29 +136,76 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  
  		this.applyingLayout = true;
  		try {
@@ -980,7 +983,7 @@ index 5bcea80..b75f7fc 100644
  		if (mode === 'claudeAgent') {
  			return CLAUDE_AGENT_CONTAINER_IDS;
  		}
-@@ -139,6 +214,16 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -139,6 +215,16 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  		return [];
  	}
  
@@ -997,7 +1000,7 @@ index 5bcea80..b75f7fc 100644
  	private captureEditLayout(): IAiHubLayoutSnapshot {
  		return {
  			activityBarVisible: this.layoutService.isVisible(Parts.ACTIVITYBAR_PART),
-@@ -164,94 +249,151 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -164,94 +250,151 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  		}
  	}
  
@@ -1062,9 +1065,7 @@ index 5bcea80..b75f7fc 100644
 +		await this.prepareAgentSurface(presentation);
 +		let commandOpened = false;
 +		const focus = presentation === 'agent';
- 
--		if (snapshot.sideBarVisible && snapshot.sideBarContainerId) {
--			await this.viewsService.openViewContainer(snapshot.sideBarContainerId, false);
++
 +		for (let attempt = 0; attempt < AGENT_SURFACE_RETRY_COUNT && this.isSurfaceRequestCurrent(mode, presentation, generation); attempt++) {
 +			await this.openFirstAvailableViewContainer(this.getAgentContainerIds(mode), focus);
 +			await this.openFirstAvailableView(this.getAgentViewIds(mode), focus);
@@ -1073,7 +1074,9 @@ index 5bcea80..b75f7fc 100644
 +				this.layoutService.layout();
 +				return;
 +			}
-+
+ 
+-		if (snapshot.sideBarVisible && snapshot.sideBarContainerId) {
+-			await this.viewsService.openViewContainer(snapshot.sideBarContainerId, false);
 +			if (!commandOpened) {
 +				try {
 +					await this.commandService.executeCommand(mode === 'claudeAgent' ? 'claude-vscode.sidebar.open' : 'chatgpt.openSidebar');
@@ -1206,7 +1209,7 @@ index 5bcea80..b75f7fc 100644
  		const agentContainerIds = new Set(this.getAgentContainerIds(mode));
  		const sideBarContainerId = this.viewsService.getVisibleViewContainer(ViewContainerLocation.Sidebar)?.id;
  		const auxiliaryBarContainerId = this.viewsService.getVisibleViewContainer(ViewContainerLocation.AuxiliaryBar)?.id;
-@@ -260,13 +402,15 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+@@ -260,21 +403,30 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  			this.layoutService.setAuxiliaryBarMaximized(false);
  			this.layoutService.setPartHidden(false, Parts.SIDEBAR_PART);
  			this.layoutService.setPartHidden(true, Parts.AUXILIARYBAR_PART);
@@ -1223,17 +1226,23 @@ index 5bcea80..b75f7fc 100644
  			return true;
  		}
  
-@@ -274,9 +418,6 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		return false;
  	}
  
++	setEnforcementSuspended(suspended: boolean): void {
++		this.enforcementSuspended = suspended;
++		if (!suspended) {
++			this.enforcementScheduler.schedule();
++		}
++	}
++
  	private async enforceAgentLayout(): Promise<void> {
 -		if (this.currentMode === 'edit') {
--			return;
--		}
- 		if (this.applyingLayout) {
- 			this.enforcementScheduler.schedule(16);
++		if (this.enforcementSuspended) {
  			return;
-@@ -284,44 +425,40 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
+ 		}
+ 		if (this.applyingLayout) {
+@@ -284,44 +436,40 @@ export class AiHubModeController extends Disposable implements IAiHubModeControl
  
  		this.applyingLayout = true;
  		try {
@@ -1300,7 +1309,7 @@ index 5bcea80..b75f7fc 100644
  	}
  }
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
-index e233496..cff47e3 100644
+index e233496..51b28cc 100644
 --- a/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/aiHubTypes.ts
 @@ -12,13 +12,16 @@ export const AI_HUB_OPEN_COMMAND_ID = 'aiHub.open';
@@ -1329,15 +1338,23 @@ index e233496..cff47e3 100644
  	readonly gatewayUrl: string;
  }
  
-@@ -47,6 +51,7 @@ export interface IAiHubModeController {
+@@ -47,6 +51,15 @@ export interface IAiHubModeController {
  
  	initialize(): Promise<void>;
  	setMode(mode: AiHubMode): Promise<void>;
 +	setEditChatProvider(provider: AiHubProvider): Promise<void>;
++
++	/**
++	 * Suspends the layout enforcement that otherwise reclaims the sidebar/auxiliary bar for
++	 * the active agent's view container whenever some other container becomes visible there
++	 * (e.g. while the native Search view is temporarily shown on top of it). Resuming
++	 * re-triggers enforcement so the agent's container is restored.
++	 */
++	setEnforcementSuspended(suspended: boolean): void;
  }
  
  export const IAiHubDrawerService = createDecorator<IAiHubDrawerService>('aiHubDrawerService');
-@@ -69,12 +74,14 @@ export interface IAiConfigService {
+@@ -69,12 +82,14 @@ export interface IAiConfigService {
  	getState(): Promise<IAiHubState>;
  
  	/**

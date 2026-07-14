@@ -1,0 +1,282 @@
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+index 7a60e26..1d6f21d 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
+@@ -51,6 +51,14 @@ interface IEditorReference {
+ 	readonly groupId: number;
+ }
+ 
++interface ISSHHostPick {
++	readonly label: string;
++	readonly description?: string;
++	readonly detail?: string;
++	readonly hostAlias?: string;
++	readonly action?: 'manual' | 'configure';
++}
++
+ /** VS Code adapter for the independent frontend protocol. */
+ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFrontendBridge {
+ 
+@@ -66,14 +74,14 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		@IAiConfigService private readonly aiConfigService: IAiConfigService,
+ 		@IAiHubModeController private readonly modeController: IAiHubModeController,
+ 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+-		@INativeEnvironmentService environmentService: INativeEnvironmentService,
++		@INativeEnvironmentService private readonly environmentService: INativeEnvironmentService,
+ 		@IFileService private readonly fileService: IFileService,
+ 		@IProductService productService: IProductService,
+ 		@IMainProcessService mainProcessService: IMainProcessService,
+ 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+ 		@IEditorService private readonly editorService: IEditorService,
+ 		@ICommandService private readonly commandService: ICommandService,
+-		@IQuickInputService quickInputService: IQuickInputService,
++		@IQuickInputService private readonly quickInputService: IQuickInputService,
+ 		@IStorageService private readonly storageService: IStorageService,
+ 		@IViewsService private readonly viewsService: IViewsService,
+ 	) {
+@@ -180,9 +188,88 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 			await this.terminalController.toggle();
+ 			return;
+ 		}
++		if (action === 'remoteConnect') {
++			await this.pickSSHHost();
++			return;
++		}
+ 		await this.commandService.executeCommand(FRONTEND_ACTION_COMMANDS[action]);
+ 	}
+ 
++	private async pickSSHHost(): Promise<void> {
++		const hosts = await this.readSSHConfigHosts();
++		const picks: ISSHHostPick[] = hosts.map(host => ({
++			label: `$(remote) ${host.alias}`,
++			description: host.destination,
++			detail: host.detail,
++			hostAlias: host.alias,
++		}));
++		picks.push(
++			{ label: '$(add) 手动输入主机…', action: 'manual' },
++			{ label: '$(gear) 打开 SSH 配置…', action: 'configure' },
++		);
++		const selected = await this.quickInputService.pick(picks, {
++			placeHolder: hosts.length ? '选择 ~/.ssh/config 中的主机' : '未找到已配置主机',
++			matchOnDescription: true,
++			matchOnDetail: true,
++		});
++		if (selected?.hostAlias) {
++			await this.commandService.executeCommand('vscode.newWindow', {
++				remoteAuthority: `ssh-remote+${selected.hostAlias}`,
++				reuseWindow: false,
++			});
++		} else if (selected?.action === 'configure') {
++			await this.commandService.executeCommand('openremotessh.openConfigFile');
++		} else if (selected?.action === 'manual') {
++			await this.commandService.executeCommand(FRONTEND_ACTION_COMMANDS.remoteConnect);
++		}
++	}
++
++	private async readSSHConfigHosts(): Promise<readonly { alias: string; destination?: string; detail?: string }[]> {
++		const config = URI.joinPath(this.environmentService.userHome, '.ssh', 'config');
++		let contents: string;
++		try {
++			contents = (await this.fileService.readFile(config)).value.toString();
++		} catch {
++			return [];
++		}
++		const hosts: Array<{ alias: string; destination?: string; detail?: string }> = [];
++		let current: { aliases: string[]; hostName?: string; user?: string; port?: string } | undefined;
++		const flush = () => {
++			if (!current) {
++				return;
++			}
++			for (const alias of current.aliases) {
++				const destination = current.hostName && current.hostName !== alias ? current.hostName : undefined;
++				const endpoint = `${current.user ? `${current.user}@` : ''}${current.hostName ?? alias}${current.port ? `:${current.port}` : ''}`;
++				hosts.push({ alias, destination, detail: endpoint !== alias ? endpoint : undefined });
++			}
++		};
++		for (const rawLine of contents.split(/\r?\n/)) {
++			const line = rawLine.replace(/\s+#.*$/, '').trim();
++			if (!line) {
++				continue;
++			}
++			const match = /^(\S+)\s+(.+)$/.exec(line);
++			if (!match) {
++				continue;
++			}
++			const key = match[1].toLowerCase();
++			const value = match[2].trim();
++			if (key === 'host') {
++				flush();
++				current = { aliases: value.split(/\s+/).filter(alias => !/[!*?]/.test(alias)) };
++			} else if (current && key === 'hostname') {
++				current.hostName = value;
++			} else if (current && key === 'user') {
++				current.user = value;
++			} else if (current && key === 'port') {
++				current.port = value;
++			}
++		}
++		flush();
++		return hosts.filter((host, index) => hosts.findIndex(candidate => candidate.alias === host.alias) === index);
++	}
++
+ 	async toggleSearch(): Promise<void> {
+ 		this.searchActive = !this.searchActive;
+ 		this.modeController.setEnforcementSuspended(this.searchActive);
+@@ -248,6 +335,13 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		await this.gatewayController.updateApiGroup(apiKeyId, groupId);
+ 	}
+ 
++	async openGatewayApiCreation(): Promise<void> {
++		if (!this.gatewayController) {
++			throw new Error('AI Gateway 未配置');
++		}
++		await this.gatewayController.openApiCreation();
++	}
++
+ 	async logoutGateway(): Promise<void> {
+ 		await this.gatewayController?.logout();
+ 		this.storageService.remove(`${GATEWAY_API_KEY_STORAGE_PREFIX}claude`, StorageScope.PROFILE);
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+index 4e55da3..41e4e6d 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldGatewayController.ts
+@@ -280,6 +280,20 @@ export class BoldGatewayController extends Disposable {
+ 		}
+ 	}
+ 
++	async openApiCreation(): Promise<void> {
++		this.container.classList.add('is-open');
++		this.container.setAttribute('aria-hidden', 'false');
++		this.container.inert = false;
++		this.renderMessage('正在打开 API 管理…', '可在 Gateway 中创建新的 API。', true);
++		await this.ensureBrowser();
++		const session = await this.getSession(true);
++		if (session.status !== 'authenticated') {
++			this.renderLogin(session.message);
++			return;
++		}
++		await this.showPage('/keys', true);
++	}
++
+ 	private async close(): Promise<void> {
+ 		this.container.classList.remove('is-open');
+ 		this.container.setAttribute('aria-hidden', 'true');
+diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+index 65ea6b4..9a30430 100644
+--- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
++++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
+@@ -265,6 +265,47 @@ body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench > .m
+ 	pointer-events: none !important;
+ }
+ 
++/* The independent shell owns the editor surface, but Search still uses VS Code's native
++ * sidebar. Reveal only that part while keeping the rest of the native grid inert. */
++body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench {
++	z-index: 850 !important;
++	visibility: visible !important;
++	opacity: 1 !important;
++	pointer-events: none !important;
++	background: transparent !important;
++}
++
++body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench > .monaco-grid-view {
++	visibility: visible !important;
++	opacity: 1 !important;
++	pointer-events: none !important;
++}
++
++body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.editor,
++body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.panel,
++body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.auxiliarybar {
++	visibility: hidden !important;
++	pointer-events: none !important;
++}
++
++body.bold-independent-frontend.bold-search-active:not(.bold-native-overlay-active) .monaco-workbench .part.sidebar:not(.empty) {
++	position: fixed !important;
++	top: 0 !important;
++	bottom: 0 !important;
++	left: var(--bold-rail-width) !important;
++	width: var(--bold-explorer-width) !important;
++	height: auto !important;
++	visibility: visible !important;
++	opacity: 1 !important;
++	pointer-events: auto !important;
++	border-right: 1px solid color-mix(in srgb, var(--vscode-foreground) 7%, transparent) !important;
++}
++
++body.bold-search-active .bold-frontend__explorer {
++	visibility: hidden;
++	pointer-events: none;
++}
++
+ body.bold-independent-frontend .monaco-workbench .editor-group-watermark-wrapper {
+ 	display: none !important;
+ }
+@@ -578,10 +619,28 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+ 
+ .bold-frontend__gateway-groups > header {
+ 	display: grid;
+-	gap: 4px;
++	grid-template-columns: minmax(0, 1fr) auto;
++	align-items: center;
++	gap: 12px;
+ 	padding: 14px 16px 0;
+ }
+ 
++.bold-frontend__gateway-groups > header > div {
++	display: flex;
++	min-width: 0;
++	flex-direction: column;
++	gap: 3px;
++}
++
++.bold-frontend__gateway-create-api {
++	flex: 0 0 auto;
++	padding: 6px 10px;
++	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent);
++	border-radius: 8px;
++	background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent);
++	color: var(--vscode-foreground);
++}
++
+ .bold-frontend__gateway-groups > header strong {
+ 	font-size: 12px;
+ }
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+index 57cf6ec..8ae8e54 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
+@@ -617,10 +617,18 @@ export class BoldFrontendApp {
+ 	private createGatewayGroupSettings(settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): HTMLElement {
+ 		const section = this.createElement('section', 'bold-frontend__gateway-groups');
+ 		const heading = this.createElement('header');
+-		heading.append(
++		const headingCopy = this.createElement('div');
++		headingCopy.append(
+ 			this.createElement('strong', undefined, 'API 分组管理'),
+ 			this.createElement('span', undefined, '修改 API 所属平台与路由分组。'),
+ 		);
++		heading.append(headingCopy);
++		if (settings.gateway.status === 'authenticated') {
++			const createApi = this.createElement('button', 'bold-frontend__gateway-create-api', '+ 新建 API');
++			createApi.type = 'button';
++			createApi.addEventListener('click', () => void this.bridge.openGatewayApiCreation());
++			heading.append(createApi);
++		}
+ 		section.append(heading);
+ 		if (settings.gateway.status !== 'authenticated' || !settings.gateway.apiKeys.length) {
+ 			section.append(this.createElement('p', 'bold-frontend__settings-muted', settings.gateway.status === 'authenticated' ? '当前账号没有可用 API。' : '登录后可调整 API 分组。'));
+diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+index 140cbf3..f73bf74 100644
+--- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
++++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
+@@ -104,6 +104,7 @@ export interface IBoldFrontendBridge {
+ 	saveAiSettings(provider: 'claude' | 'codex', baseUrl: string, apiKey: string): Promise<void>;
+ 	selectGatewayApi(provider: BoldFrontendProvider, apiKeyId: number): Promise<void>;
+ 	updateGatewayApiGroup(apiKeyId: number, groupId: number): Promise<void>;
++	openGatewayApiCreation(): Promise<void>;
+ 	logoutGateway(): Promise<void>;
+ 	openGateway(): Promise<void>;
+ 	openSettings(): Promise<void>;

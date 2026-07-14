@@ -1,8 +1,8 @@
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
-index 3976425..dd4f3c6 100644
+index 3976425..7a60e26 100644
 --- a/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/boldFrontendWorkbenchBridge.ts
-@@ -15,10 +15,12 @@ import { INativeEnvironmentService } from '../../../../platform/environment/comm
+@@ -15,10 +15,13 @@ import { INativeEnvironmentService } from '../../../../platform/environment/comm
  import { IFileService } from '../../../../platform/files/common/files.js';
  import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
  import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -12,11 +12,12 @@ index 3976425..dd4f3c6 100644
  import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
  import { IEditorService } from '../../../services/editor/common/editorService.js';
 -import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab } from '../frontend/boldFrontendProtocol.js';
++import { IViewsService } from '../../../services/views/common/viewsService.js';
 +import { BoldFrontendAction, BoldFrontendMode, BoldFrontendProvider, IBoldFrontendAiSettings, IBoldFrontendBridge, IBoldFrontendDocument, IBoldFrontendFileEntry, IBoldFrontendState, IBoldFrontendTab, IBoldGatewayAccount } from '../frontend/boldFrontendProtocol.js';
  import { IAiConfigService, IAiHubModeController } from './aiHubTypes.js';
  import { BoldGatewayController } from './boldGatewayController.js';
  import { BoldTerminalController } from './boldTerminalController.js';
-@@ -28,9 +30,11 @@ const FRONTEND_ACTION_COMMANDS: Readonly<Record<BoldFrontendAction, string>> = {
+@@ -28,9 +31,12 @@ const FRONTEND_ACTION_COMMANDS: Readonly<Record<BoldFrontendAction, string>> = {
  	newFile: 'workbench.action.files.newUntitledFile',
  	quickOpen: 'workbench.action.quickOpen',
  	terminal: 'workbench.action.terminal.toggleTerminal',
@@ -24,20 +25,30 @@ index 3976425..dd4f3c6 100644
  };
  
  const NATIVE_WELCOME_EDITOR_TYPE_ID = 'workbench.editors.gettingStartedInput';
++const SEARCH_VIEWLET_ID = 'workbench.view.search';
 +const GATEWAY_API_KEY_STORAGE_PREFIX = 'aiHub.gatewayApiKey.';
  
  const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
  	'.c': 'c', '.cc': 'cpp', '.cpp': 'cpp', '.cs': 'csharp', '.css': 'css', '.go': 'go',
-@@ -66,6 +70,8 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+@@ -52,6 +58,7 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 	private readonly editorReferences = new Map<string, IEditorReference>();
+ 	private stateRequest = 0;
+ 	private editSurfacePrepared = false;
++	private searchActive = false;
+ 	private readonly gatewayController: BoldGatewayController | undefined;
+ 	private readonly terminalController: BoldTerminalController;
+ 
+@@ -66,6 +73,9 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
  		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
  		@IEditorService private readonly editorService: IEditorService,
  		@ICommandService private readonly commandService: ICommandService,
 +		@IQuickInputService quickInputService: IQuickInputService,
 +		@IStorageService private readonly storageService: IStorageService,
++		@IViewsService private readonly viewsService: IViewsService,
  	) {
  		super();
  		const browserViewService = ProxyChannel.toService<IBrowserViewService>(mainProcessService.getChannel(ipcBrowserViewChannelName));
-@@ -74,18 +80,26 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+@@ -74,18 +84,26 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
  			mainWindow.vscodeWindowId,
  			productService.aiGatewayUrl,
  			browserViewService,
@@ -66,7 +77,7 @@ index 3976425..dd4f3c6 100644
  		const mode = this.modeController.mode;
  		await this.prepareEditSurface(mode);
  		const workspace = this.workspaceContextService.getWorkspace();
-@@ -104,7 +118,9 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+@@ -104,8 +122,11 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
  			tabs: this.collectTabs(),
  			claudeEnabled: aiState.claudeEnabled,
  			codexEnabled: aiState.codexEnabled,
@@ -75,9 +86,28 @@ index 3976425..dd4f3c6 100644
 +			gatewayBalance: gateway.balance,
 +			gatewayTodayUsage: gateway.todayUsage,
  			editChatProvider: aiState.editChatProvider,
++			searchActive: this.searchActive,
  		};
  	}
-@@ -172,13 +188,19 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 
+@@ -162,6 +183,16 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+ 		await this.commandService.executeCommand(FRONTEND_ACTION_COMMANDS[action]);
+ 	}
+ 
++	async toggleSearch(): Promise<void> {
++		this.searchActive = !this.searchActive;
++		this.modeController.setEnforcementSuspended(this.searchActive);
++		mainWindow.document.body.classList.toggle('bold-search-active', this.searchActive);
++		if (this.searchActive) {
++			await this.viewsService.openViewContainer(SEARCH_VIEWLET_ID, true);
++		}
++		await this.emitState();
++	}
++
+ 	async setMode(mode: BoldFrontendMode): Promise<void> {
+ 		await this.modeController.setMode(mode);
+ 	}
+@@ -172,13 +203,19 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
  	}
  
  	async getAiSettings(): Promise<IBoldFrontendAiSettings> {
@@ -98,7 +128,7 @@ index 3976425..dd4f3c6 100644
  		};
  	}
  
-@@ -191,6 +213,30 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+@@ -191,6 +228,30 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
  		} else {
  			await this.aiConfigService.saveCodexSettings({ baseUrl, apiKey });
  		}
@@ -129,7 +159,7 @@ index 3976425..dd4f3c6 100644
  	}
  
  	async openGateway(): Promise<void> {
-@@ -199,6 +245,15 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
+@@ -199,6 +260,15 @@ export class BoldFrontendWorkbenchBridge extends Disposable implements IBoldFron
  
  	async openSettings(): Promise<void> { }
  
@@ -641,7 +671,7 @@ index 7a45f62..4e55da3 100644
  		this.content.replaceChildren();
  		this.browserHost.hidden = false;
 diff --git a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
-index cdf8edd..ca2c99f 100644
+index cdf8edd..65ea6b4 100644
 --- a/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
 +++ b/src/vs/workbench/contrib/aiHub/electron-browser/media/boldFrontend.css
 @@ -191,7 +191,7 @@ body.bold-independent-frontend .monaco-workbench {
@@ -653,13 +683,33 @@ index cdf8edd..ca2c99f 100644
  	visibility: hidden !important;
  	opacity: 0 !important;
  	pointer-events: none !important;
-@@ -234,6 +234,25 @@ body.bold-independent-frontend .monaco-workbench .monaco-dialog-box {
+@@ -227,13 +227,44 @@ body.bold-independent-frontend .monaco-workbench > .notifications-toasts,
+ body.bold-independent-frontend .monaco-workbench > .notifications-center,
+ body.bold-independent-frontend .monaco-workbench .part.banner,
+ body.bold-independent-frontend .monaco-workbench .monaco-sash,
+-body.bold-independent-frontend .monaco-workbench .quick-input-widget,
+ body.bold-independent-frontend .monaco-workbench .context-view,
+ body.bold-independent-frontend .monaco-workbench .monaco-dialog-box {
+ 	display: none !important;
  	pointer-events: none !important;
  }
  
-+/* Quick Open and the command palette are invoked by the independent shell. */
-+body.bold-independent-frontend .monaco-workbench > .quick-input-widget {
-+	display: block !important;
++/*
++ * Quick Open and the command palette are invoked by the independent shell, on top of
++ * bold-native-overlay-active (see boldFrontendWorkbenchBridge.ts's IQuickInputService
++ * onShow/onHide listeners). Forcing display:block unconditionally here used to fight VS
++ * Code's own show/hide logic: dismissing a picker (e.g. Esc) sets the widget's inline
++ * style back to display:none, but that inline change was overridden right back to
++ * visible, leaving a stale, un-closeable widget on screen whenever the ancestor
++ * .monaco-workbench is otherwise kept visible (edit/agent mode). Only escape the
++ * default-hidden treatment while a picker is genuinely open; let VS Code's own inline
++ * display style govern it otherwise.
++ */
++body.bold-independent-frontend:not(.bold-native-overlay-active) .monaco-workbench > .quick-input-widget {
++	display: none !important;
++}
++
++body.bold-independent-frontend.bold-native-overlay-active .monaco-workbench > .quick-input-widget {
 +	visibility: visible !important;
 +	opacity: 1 !important;
 +	pointer-events: auto !important;
@@ -679,7 +729,7 @@ index cdf8edd..ca2c99f 100644
  body.bold-independent-frontend .monaco-workbench .editor-group-watermark-wrapper {
  	display: none !important;
  }
-@@ -376,7 +395,7 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+@@ -376,7 +407,7 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
  	top: 10px;
  	right: 10px;
  	bottom: 10px;
@@ -688,7 +738,7 @@ index cdf8edd..ca2c99f 100644
  	overflow: hidden;
  	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
  	border-radius: 16px;
-@@ -450,6 +469,144 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+@@ -450,6 +481,144 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
  	line-height: 1.65;
  }
  
@@ -833,7 +883,7 @@ index cdf8edd..ca2c99f 100644
  .bold-frontend__chat-preference {
  	display: grid;
  	gap: 14px;
-@@ -580,7 +737,9 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+@@ -580,7 +749,9 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
  	font-weight: 600;
  }
  
@@ -844,7 +894,7 @@ index cdf8edd..ca2c99f 100644
  	height: 38px;
  	box-sizing: border-box;
  	margin-bottom: 14px;
-@@ -590,13 +749,40 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
+@@ -590,13 +761,40 @@ body.ai-hub-edit-chat-mode.bold-independent-frontend .monaco-workbench > .bold-a
  	outline: 0;
  	background: var(--vscode-input-background);
  	color: var(--vscode-input-foreground);
@@ -887,10 +937,18 @@ index cdf8edd..ca2c99f 100644
  	display: flex;
  	align-items: center;
 diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
-index 5b0e152..13d99d0 100644
+index 5b0e152..57cf6ec 100644
 --- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
 +++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendApp.ts
-@@ -60,6 +60,7 @@ export class BoldFrontendApp {
+@@ -40,6 +40,7 @@ export class BoldFrontendApp {
+ 	private readonly workspaceTree: HTMLElement;
+ 	private readonly tabs: HTMLElement;
+ 	private readonly workspaceTitle: HTMLElement;
++	private readonly searchButton: HTMLElement;
+ 	private readonly connectionStatus: HTMLElement;
+ 	private readonly providerStatus: HTMLElement;
+ 	private readonly editorHost: HTMLElement;
+@@ -60,6 +61,7 @@ export class BoldFrontendApp {
  	private stateApplication = 0;
  	private switchingMode = false;
  	private pendingMode: BoldFrontendMode | undefined;
@@ -898,7 +956,19 @@ index 5b0e152..13d99d0 100644
  
  	constructor(
  		private readonly document: Document,
-@@ -96,7 +97,7 @@ export class BoldFrontendApp {
+@@ -79,9 +81,10 @@ export class BoldFrontendApp {
+ 		const railPrimary = this.createElement('div', 'bold-frontend__rail-group');
+ 		const editButton = this.createButton({ className: 'is-active', icon: '▱', label: '文件', title: '工作区文件', onClick: () => void this.openEditMode() });
+ 		editButton.dataset.mode = 'edit';
++		this.searchButton = this.createButton({ icon: '⌕', label: '搜索', title: '全文本搜索', onClick: () => void this.bridge.toggleSearch() });
+ 		railPrimary.append(
+ 			editButton,
+-			this.createButton({ icon: '⌕', label: '搜索', title: '快速打开', onClick: () => void this.runAction('quickOpen') }),
++			this.searchButton,
+ 			this.createButton({ icon: '>_', label: '终端', title: '切换终端', onClick: () => void this.runAction('terminal') }),
+ 		);
+ 		rail.append(railPrimary);
+@@ -96,7 +99,7 @@ export class BoldFrontendApp {
  
  		const railBottom = this.createElement('div', 'bold-frontend__rail-group bold-frontend__rail-group--bottom');
  		railBottom.append(
@@ -907,7 +977,7 @@ index 5b0e152..13d99d0 100644
  			this.createButton({ icon: '⚙', label: '设置', title: 'AI 与应用设置', onClick: () => void this.toggleSettings() }),
  		);
  		rail.append(railBottom);
-@@ -153,7 +154,7 @@ export class BoldFrontendApp {
+@@ -153,7 +156,7 @@ export class BoldFrontendApp {
  		this.settingsDrawer.inert = true;
  		const settingsHeader = this.createElement('header', 'bold-frontend__settings-header');
  		settingsHeader.append(
@@ -916,9 +986,11 @@ index 5b0e152..13d99d0 100644
  			this.createButton({ className: 'bold-frontend__settings-close', icon: '×', label: '关闭设置', onClick: () => this.closeSettings() }),
  		);
  		this.settingsBody = this.createElement('div', 'bold-frontend__settings-body');
-@@ -270,8 +271,10 @@ export class BoldFrontendApp {
+@@ -269,9 +272,12 @@ export class BoldFrontendApp {
+ 		for (const button of this.element.querySelectorAll<HTMLElement>('[data-mode]')) {
  			button.classList.toggle('is-active', button.dataset.mode === state.mode);
  		}
++		this.searchButton.classList.toggle('is-active', state.searchActive);
  		this.workspaceTitle.textContent = state.workspaceName;
 -		this.connectionStatus.textContent = state.gatewayConnected ? '● Gateway 已连接' : '○ Gateway 未连接';
 -		this.connectionStatus.classList.toggle('is-connected', state.gatewayConnected);
@@ -929,7 +1001,7 @@ index 5b0e152..13d99d0 100644
  		const editChatName = state.editChatProvider === 'claude' ? 'Claude' : 'Codex';
  		this.providerStatus.textContent = state.mode === 'edit'
  			? `右侧对话 · ${editChatName}`
-@@ -414,10 +417,6 @@ export class BoldFrontendApp {
+@@ -414,10 +420,6 @@ export class BoldFrontendApp {
  			this.createUntitledDocument();
  			return;
  		}
@@ -940,7 +1012,7 @@ index 5b0e152..13d99d0 100644
  		await this.bridge.runAction(action);
  	}
  
-@@ -518,6 +517,7 @@ export class BoldFrontendApp {
+@@ -518,6 +520,7 @@ export class BoldFrontendApp {
  			this.closeSettings();
  			return;
  		}
@@ -948,7 +1020,7 @@ index 5b0e152..13d99d0 100644
  		this.settingsDrawer.classList.add('is-open');
  		this.settingsDrawer.setAttribute('aria-hidden', 'false');
  		this.settingsDrawer.inert = false;
-@@ -530,9 +530,11 @@ export class BoldFrontendApp {
+@@ -530,9 +533,11 @@ export class BoldFrontendApp {
  	}
  
  	private closeSettings(): void {
@@ -961,7 +1033,7 @@ index 5b0e152..13d99d0 100644
  	}
  
  	private renderSettings(settings: Awaited<ReturnType<IBoldFrontendBridge['getAiSettings']>>): void {
-@@ -540,15 +542,130 @@ export class BoldFrontendApp {
+@@ -540,15 +545,130 @@ export class BoldFrontendApp {
  		const intro = this.createElement('section', 'bold-frontend__settings-intro');
  		intro.append(
  			this.createElement('span', 'bold-frontend__eyebrow', 'AI WORKSPACE'),
@@ -1096,7 +1168,7 @@ index 5b0e152..13d99d0 100644
  	}
  
  	private createEditChatProviderSettings(selectedProvider: BoldFrontendProvider): HTMLElement {
-@@ -607,7 +724,10 @@ export class BoldFrontendApp {
+@@ -607,7 +727,10 @@ export class BoldFrontendApp {
  		return card;
  	}
  
@@ -1108,7 +1180,7 @@ index 5b0e152..13d99d0 100644
  		const card = this.createElement('section', 'bold-frontend__provider-card');
  		const header = this.createElement('header', 'bold-frontend__provider-header');
  		header.append(
-@@ -615,6 +735,44 @@ export class BoldFrontendApp {
+@@ -615,6 +738,44 @@ export class BoldFrontendApp {
  			this.createElement('strong', undefined, title),
  			hasApiKey ? this.createElement('span', 'bold-frontend__provider-connected', '已连接') : this.createElement('span'),
  		);
@@ -1153,7 +1225,7 @@ index 5b0e152..13d99d0 100644
  		const form = this.createElement('form', 'bold-frontend__provider-form');
  		const baseUrlLabel = this.createElement('label', undefined, 'Base URL');
  		const baseUrl = this.createElement('input');
-@@ -643,10 +801,44 @@ export class BoldFrontendApp {
+@@ -643,10 +804,44 @@ export class BoldFrontendApp {
  				status.textContent = '保存失败';
  			}).finally(() => submit.disabled = false);
  		});
@@ -1200,7 +1272,7 @@ index 5b0e152..13d99d0 100644
  		if (!this.switchingMode && this.state?.mode === mode) {
  			return;
 diff --git a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
-index dfc14d8..0b2d4ec 100644
+index dfc14d8..140cbf3 100644
 --- a/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
 +++ b/src/vs/workbench/contrib/aiHub/frontend/boldFrontendProtocol.ts
 @@ -6,7 +6,7 @@
@@ -1260,7 +1332,7 @@ index dfc14d8..0b2d4ec 100644
  }
  
  export interface IBoldFrontendState {
-@@ -43,7 +78,9 @@ export interface IBoldFrontendState {
+@@ -43,8 +78,11 @@ export interface IBoldFrontendState {
  	readonly tabs: readonly IBoldFrontendTab[];
  	readonly claudeEnabled: boolean;
  	readonly codexEnabled: boolean;
@@ -1269,9 +1341,16 @@ index dfc14d8..0b2d4ec 100644
 +	readonly gatewayBalance?: number;
 +	readonly gatewayTodayUsage?: number;
  	readonly editChatProvider: BoldFrontendProvider;
++	readonly searchActive: boolean;
  }
  
-@@ -63,6 +100,9 @@ export interface IBoldFrontendBridge {
+ /**
+@@ -59,10 +97,14 @@ export interface IBoldFrontendBridge {
+ 	activateTab(id: string): Promise<void>;
+ 	closeTab(id: string): Promise<void>;
+ 	runAction(action: BoldFrontendAction): Promise<void>;
++	toggleSearch(): Promise<void>;
+ 	setMode(mode: BoldFrontendMode): Promise<void>;
  	setEditChatProvider(provider: BoldFrontendProvider): Promise<void>;
  	getAiSettings(): Promise<IBoldFrontendAiSettings>;
  	saveAiSettings(provider: 'claude' | 'codex', baseUrl: string, apiKey: string): Promise<void>;
