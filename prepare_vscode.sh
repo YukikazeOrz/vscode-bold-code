@@ -314,7 +314,8 @@ openRemoteSshExtJson=$( jq -n --arg version "${OPEN_REMOTE_SSH_VERSION}" --arg s
   }
 }' )
 jsonTmp=$( jq --argjson exts "$( cat ../ai-builtin-extensions.json )" --argjson claudeExt "${claudeExtJson}" --argjson codexExt "${codexExtJson}" --argjson zhHansExt "${zhHansExtJson}" --argjson openRemoteSshExt "${openRemoteSshExtJson}" \
-  '.builtInExtensions += $exts + [$claudeExt, $codexExt, $zhHansExt, $openRemoteSshExt]' product.json )
+  '.builtInExtensions += $exts + [$claudeExt, $codexExt, $zhHansExt, $openRemoteSshExt]
+  | .builtInExtensionsEnabledWithAutoUpdates += [$claudeExt.name, $codexExt.name]' product.json )
 echo "${jsonTmp}" > product.json && unset jsonTmp
 
 cat product.json

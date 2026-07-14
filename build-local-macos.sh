@@ -152,6 +152,44 @@ if [[ -f ".nvmrc" ]]; then
   fi
 fi
 
+# VS Code's preinstall guard currently rejects npm 12. Keep the Node version
+# selected from .nvmrc, but prefer an already-installed compatible npm binary.
+ensure_supported_npm() {
+  local current_version current_major candidate candidate_version candidate_major shim_dir
+
+  command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
+  current_version=$(npm --version)
+  current_major=${current_version%%.*}
+  if (( current_major < 12 )); then
+    echo "Using npm ${current_version}."
+    return 0
+  fi
+
+  for candidate in /opt/homebrew/bin/npm /usr/local/bin/npm; do
+    [[ -x "${candidate}" ]] || continue
+    candidate_version=$("${candidate}" --version)
+    candidate_major=${candidate_version%%.*}
+    if (( candidate_major < 12 )); then
+      shim_dir="${VSCODE_BUILD_CACHE}/npm-bin"
+      mkdir -p "${shim_dir}"
+      ln -sf "${candidate}" "${shim_dir}/npm"
+      if [[ -x "${candidate%/npm}/npx" ]]; then
+        ln -sf "${candidate%/npm}/npx" "${shim_dir}/npx"
+      fi
+      export PATH="${shim_dir}:${PATH}"
+      hash -r
+      echo "npm ${current_version} is unsupported; using npm $(npm --version) from ${candidate}."
+      return 0
+    fi
+  done
+
+  echo "VS Code requires npm < 12, but npm ${current_version} is active and no compatible Homebrew npm was found." >&2
+  echo "Install npm 11 (for example: npm install -g npm@11) and rerun the build." >&2
+  exit 1
+}
+
+ensure_supported_npm
+
 echo "== Building ${APP_NAME} (${VSCODE_QUALITY}, ${VSCODE_ARCH}) =="
 echo "Build cache: ${VSCODE_BUILD_CACHE}"
 if [[ -n "${CERTIFICATE_OSX_P12_DATA:-}" ]]; then
