@@ -50,6 +50,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Switch to relevant branch
         env:
@@ -144,6 +145,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.DISABLED != 'yes'
 
       - name: Switch to relevant branch
@@ -235,6 +237,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.DISABLED != 'yes'
 
       - name: Switch to relevant branch
@@ -319,6 +322,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Switch to relevant branch
         env:

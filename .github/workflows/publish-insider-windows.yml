@@ -32,6 +32,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Clone VSCode repo
         run: ./get_repo.sh
@@ -64,6 +65,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup Node.js environment
@@ -137,6 +139,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup Node.js environment
@@ -238,6 +241,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Check version
         run: ./stores/winget/check_version.sh

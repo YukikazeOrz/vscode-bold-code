@@ -34,6 +34,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Clone VSCode repo
         run: ./get_repo.sh
@@ -64,6 +65,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.SHOULD_BUILD == 'yes'
 
       - name: Setup GCC
@@ -167,6 +169,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.DISABLED != 'yes' && env.SHOULD_BUILD == 'yes'
 
       - name: Install GH
@@ -271,6 +274,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
         if: env.DISABLED != 'yes'
 
       - name: Setup GCC
@@ -361,6 +365,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Setup GCC
         uses: egor-tensin/setup-gcc@a2861a8b8538f49cf2850980acccf6b05a1b2ae4 # v2.0
@@ -454,6 +459,7 @@ jobs:
         with:
           ref: ${{ env.GITHUB_BRANCH }}
           persist-credentials: false
+          lfs: true
 
       - name: Check version
         env:
