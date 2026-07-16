@@ -70,7 +70,17 @@ function isUpToDate(extension: IExtensionDefinition): boolean {
 
 	try {
 		const diskVersion = JSON.parse(packageContents).version;
-		return (diskVersion === extension.version);
+		if (diskVersion !== extension.version) {
+			return false;
+		}
+
+		const localExtension = extension.vsix ? localExtensionsManifest[extension.vsix.split('/').pop()!] : undefined;
+		if (localExtension) {
+			const checksumPath = path.join(getExtensionPath(extension), '.vsix-sha256');
+			return fs.existsSync(checksumPath) && fs.readFileSync(checksumPath, 'utf8').trim() === localExtension.sha256;
+		}
+
+		return true;
 	} catch (err) {
 		return false;
 	}
@@ -111,7 +121,13 @@ function syncMarketplaceExtension(extension: IExtensionDefinition): Stream {
 
 	return getExtensionDownloadStream(extension)
 		.pipe(vfs.dest('.build/builtInExtensions'))
-		.on('end', () => log(source, extension.name, ansiColors.green('✔︎')));
+		.on('end', () => {
+			const localExtension = extension.vsix ? localExtensionsManifest[extension.vsix.split('/').pop()!] : undefined;
+			if (localExtension) {
+				fs.writeFileSync(path.join(getExtensionPath(extension), '.vsix-sha256'), localExtension.sha256);
+			}
+			log(source, extension.name, ansiColors.green('✔︎'));
+		});
 }
 
 function syncExtension(extension: IExtensionDefinition, controlState: 'disabled' | 'marketplace'): Stream {

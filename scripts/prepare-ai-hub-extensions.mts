@@ -13,8 +13,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 type Extension = { publisher: string; name: string; filename: string; github?: string };
-type Download = { version: string; url: string };
-type ExtensionState = { version: string; sha256: string };
+type Download = { version: string; url: string; targetPlatform?: string };
+type ExtensionState = { version: string; sha256: string; targetPlatform?: string };
 type Manifest = { extensions: Record<string, ExtensionState> };
 type GitHubRelease = { tag_name?: string; assets?: Array<{ name: string; browser_download_url?: string }> };
 
@@ -45,12 +45,20 @@ async function latestVersion({ publisher, name, github }: Extension): Promise<Do
 		headers: { 'Accept': 'application/json;api-version=7.2-preview.1', 'Content-Type': 'application/json' },
 		body: JSON.stringify({ filters: [{ criteria: [{ filterType: 7, value: `${publisher}.${name}` }] }], flags: 914 }),
 	});
-	const body = await response.json() as { results?: Array<{ extensions?: Array<{ versions?: Array<{ version?: string }> }> }> };
-	const version = body.results?.[0]?.extensions?.[0]?.versions?.[0]?.version;
+	const body = await response.json() as { results?: Array<{ extensions?: Array<{ versions?: Array<{ version?: string; targetPlatform?: string }> }> }> };
+	const targetPlatform = process.platform === 'darwin' ? `darwin-${process.arch}` : `${process.platform}-${process.arch}`;
+	const versions = body.results?.[0]?.extensions?.[0]?.versions ?? [];
+	const selectedVersion = versions.find(version => version.targetPlatform === targetPlatform) ?? versions.find(version => !version.targetPlatform);
+	const version = selectedVersion?.version;
 	if (!response.ok || typeof version !== 'string') {
 		throw new Error(`Marketplace did not return a version for ${publisher}.${name}.`);
 	}
-	return { version, url: `https://${publisher}.gallery.vsassets.io/_apis/public/gallery/publisher/${publisher}/extension/${name}/${version}/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage` };
+	const platformQuery = selectedVersion?.targetPlatform ? `?targetPlatform=${encodeURIComponent(selectedVersion.targetPlatform)}` : '';
+	return {
+		version,
+		targetPlatform: selectedVersion?.targetPlatform,
+		url: `https://${publisher}.gallery.vsassets.io/_apis/public/gallery/publisher/${publisher}/extension/${name}/${version}/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage${platformQuery}`
+	};
 }
 
 async function checksum(file: string): Promise<string> {
@@ -68,11 +76,11 @@ const previousManifest: Manifest = await readFile(manifestPath, 'utf8')
 	.catch(() => ({ extensions: {} }));
 const manifest: Manifest = { extensions: {} };
 for (const extension of extensions) {
-	const { version, url } = await latestVersion(extension);
+	const { version, url, targetPlatform } = await latestVersion(extension);
 	const target = path.join(destination, extension.filename);
 	let hash = await checksum(target).catch(() => undefined);
 	const existingVersion = hash ? await vsixVersion(target).catch(() => undefined) : undefined;
-	if (existingVersion !== version || (previousManifest.extensions[extension.filename] && previousManifest.extensions[extension.filename].sha256 !== hash)) {
+	if (existingVersion !== version || previousManifest.extensions[extension.filename]?.targetPlatform !== targetPlatform || previousManifest.extensions[extension.filename]?.sha256 !== hash) {
 		console.log(`Downloading AI Hub extension: ${extension.publisher}.${extension.name}@${version}`);
 		const response = await fetch(url);
 		if (!response.ok) {
@@ -85,6 +93,6 @@ for (const extension of extensions) {
 	} else {
 		console.log(`AI Hub extension is ready: ${extension.publisher}.${extension.name}@${version}`);
 	}
-	manifest.extensions[extension.filename] = { version, sha256: hash! };
+	manifest.extensions[extension.filename] = { version, sha256: hash!, targetPlatform };
 	await writeFile(manifestPath, `${JSON.stringify(manifest, null, '\t')}\n`);
 }

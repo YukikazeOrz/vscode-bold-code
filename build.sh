@@ -13,8 +13,8 @@ Usage: ./build.sh [--skip-install] [--package]
 Installs dependencies (unless --skip-install is supplied) and compiles the
 VS Code client into out/.
 
---package additionally creates a native macOS app in .build/ for the host
-architecture (Apple Silicon: VSCode-darwin-arm64; Intel: VSCode-darwin-x64).
+--package additionally creates a native app in .build/ for the host platform
+(macOS: VSCode-darwin-arm64/x64; Windows: VSCode-win32-x64).
 EOF
 	exit 0
 fi
@@ -94,21 +94,33 @@ if [[ "${SKIP_INSTALL}" != true ]]; then
 	run_npm ci
 fi
 
-node --experimental-strip-types ./scripts/prepare-ai-hub-extensions.ts
+node --experimental-strip-types ./scripts/prepare-ai-hub-extensions.mts
 
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=8192}"
 run_npm run gulp compile
 
 if [[ "${PACKAGE}" == true ]]; then
-	case "$(uname -m)" in
-		arm64) package_arch='arm64' ;;
-		x86_64) package_arch='x64' ;;
+	case "$(uname -s)" in
+		Darwin)
+			case "$(uname -m)" in
+				arm64) package_arch='arm64' ;;
+				x86_64) package_arch='x64' ;;
+				*)
+					echo "Unsupported macOS architecture: $(uname -m)" >&2
+					exit 1
+					;;
+			esac
+			package_target="darwin-${package_arch}"
+			;;
+		MINGW*|MSYS*|CYGWIN*)
+			package_target='win32-x64'
+			;;
 		*)
-			echo "Unsupported macOS architecture: $(uname -m)" >&2
+			echo "Packaging is supported on macOS and Windows; found $(uname -s)." >&2
 			exit 1
 			;;
 	esac
 
-	run_npm run gulp "vscode-darwin-${package_arch}"
-	echo "Packaged app: ${ROOT_DIR}/.build/VSCode-darwin-${package_arch}"
+	run_npm run gulp "vscode-${package_target}"
+	echo "Packaged app: ${ROOT_DIR}/.build/VSCode-${package_target}"
 fi

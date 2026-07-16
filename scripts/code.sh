@@ -38,7 +38,7 @@ function code() {
 
 	# Get electron, compile, built-in extensions
 	if [[ -z "${VSCODE_SKIP_PRELAUNCH}" ]]; then
-		node --experimental-strip-types ./scripts/prepare-ai-hub-extensions.ts
+		node --experimental-strip-types ./scripts/prepare-ai-hub-extensions.mts
 		node build/lib/preLaunch.ts
 	fi
 
