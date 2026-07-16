@@ -128,7 +128,9 @@ export class DesktopMain extends Disposable {
 		// (fixes https://github.com/microsoft/vscode/issues/187982)
 		this.applyWindowZoomLevel(services.configurationService);
 
-		// Create Workbench
+		// Create the shared backend kernel once for every Bold mode. The native
+		// workbench parts are never used as the product frontend; the Bold shell
+		// owns the window and only exposes the selected extension Webview surface.
 		const workbench = new Workbench(mainWindow.document.body, {
 			extraClasses: this.getExtraClasses(),
 			resetLayout: this.configuration['disable-layout-restore'] === true

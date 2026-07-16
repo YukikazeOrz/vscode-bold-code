@@ -479,19 +479,6 @@ class OpenOrListBrowsersAction extends Action2 {
 				weight: KeybindingWeight.WorkbenchContrib,
 				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.Slash,
 			},
-			menu: {
-				id: MenuId.TitleBar,
-				group: 'navigation',
-				order: 10,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('config.workbench.browser.showInTitleBar', false).negate(),
-					ContextKeyExpr.or(
-						CONTEXT_BROWSER_EDITOR_OPEN,
-						// This is a hack to work around `true` just testing for truthiness of the key. It works since `1 == true` in JS.
-						ContextKeyExpr.equals('config.workbench.browser.showInTitleBar', 1)
-					)
-				),
-			}
 		});
 	}
 

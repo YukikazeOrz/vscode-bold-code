@@ -258,7 +258,7 @@ export class LayoutController extends Disposable {
 
 		// --- Editor working sets ---
 
-		this._useModalConfigObs = observableConfigValue<'off' | 'some' | 'all'>('workbench.editor.useModal', 'all', this._configurationService);
+		this._useModalConfigObs = observableConfigValue<'off' | 'some' | 'all'>('workbench.editor.useModal', 'off', this._configurationService);
 
 		// Workspace folders — used to defer session switch until workspace is ready
 		const workspaceFoldersObs = observableFromEvent(

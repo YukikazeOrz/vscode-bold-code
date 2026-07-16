@@ -29,246 +29,215 @@
 	}
 
 	function showDefaultSplash(configuration: INativeWindowConfiguration) {
-		let data = configuration.partsSplash;
-		if (data) {
-			if (configuration.autoDetectHighContrast && configuration.colorScheme.highContrast) {
-				if ((configuration.colorScheme.dark && data.baseTheme !== 'hc-black') || (!configuration.colorScheme.dark && data.baseTheme !== 'hc-light')) {
-					data = undefined; // high contrast mode has been turned by the OS -> ignore stored colors and layouts
-				}
-			} else if (configuration.autoDetectColorScheme) {
-				if ((configuration.colorScheme.dark && data.baseTheme !== 'vs-dark') || (!configuration.colorScheme.dark && data.baseTheme !== 'vs')) {
-					data = undefined; // OS color scheme is tracked and has changed
-				}
-			}
-		}
+		const data = configuration.partsSplash;
 
-		// developing an extension -> ignore stored layouts
-		if (data && configuration.extensionDevelopmentPath) {
-			data.layoutInfo = undefined;
-		}
-
-		// minimal color configuration (works with or without persisted data)
-		let baseTheme;
-		let shellBackground;
-		let shellForeground;
-		if (data) {
-			baseTheme = data.baseTheme;
-			shellBackground = data.colorInfo.editorBackground;
-			shellForeground = data.colorInfo.foreground;
-		} else if (configuration.autoDetectHighContrast && configuration.colorScheme.highContrast) {
-			if (configuration.colorScheme.dark) {
-				baseTheme = 'hc-black';
-				shellBackground = '#000000';
-				shellForeground = '#FFFFFF';
-			} else {
-				baseTheme = 'hc-light';
-				shellBackground = '#FFFFFF';
-				shellForeground = '#000000';
-			}
-		} else if (configuration.autoDetectColorScheme) {
-			if (configuration.colorScheme.dark) {
-				baseTheme = 'vs-dark';
-				shellBackground = '#1E1E1E';
-				shellForeground = '#CCCCCC';
-			} else {
-				baseTheme = 'vs';
-				shellBackground = '#FFFFFF';
-				shellForeground = '#000000';
-			}
-		}
-
-		const style = document.createElement('style');
-		style.className = 'initialShellColors';
-		window.document.head.appendChild(style);
-		style.textContent = `body {	background-color: ${shellBackground}; color: ${shellForeground}; margin: 0; padding: 0; }`;
-
-		// set zoom level as soon as possible
+		// Preserve the persisted zoom level, but never paint the cached VS Code parts.
 		if (typeof data?.zoomLevel === 'number' && typeof preloadGlobals?.webFrame?.setZoomLevel === 'function') {
 			preloadGlobals.webFrame.setZoomLevel(data.zoomLevel);
 		}
 
-		// restore parts if possible (we might not always store layout info)
-		if (data?.layoutInfo) {
-			const { layoutInfo, colorInfo } = data;
-
-			const splash = document.createElement('div');
-			splash.id = 'monaco-parts-splash';
-			splash.className = baseTheme ?? 'vs-dark';
-
-			if (layoutInfo.windowBorder && colorInfo.windowBorder) {
-				const borderElement = document.createElement('div');
-				borderElement.style.position = 'absolute';
-				borderElement.style.width = 'calc(100vw - 2px)';
-				borderElement.style.height = 'calc(100vh - 2px)';
-				borderElement.style.zIndex = '1'; // allow border above other elements
-				borderElement.style.border = `1px solid var(--window-border-color)`;
-				borderElement.style.setProperty('--window-border-color', colorInfo.windowBorder);
-
-				if (layoutInfo.windowBorderRadius) {
-					borderElement.style.borderRadius = layoutInfo.windowBorderRadius;
-				}
-
-				splash.appendChild(borderElement);
+		const style = document.createElement('style');
+		style.className = 'initialShellColors';
+		style.textContent = `
+			body {
+				margin: 0;
+				padding: 0;
+				background: #0b0e14;
+				color: #d7dce6;
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 			}
-
-			if (layoutInfo.auxiliaryBarWidth === Number.MAX_SAFE_INTEGER) {
-				// if auxiliary bar is maximized, it goes as wide as the
-				// window width but leaving room for activity bar
-				layoutInfo.auxiliaryBarWidth = window.innerWidth - layoutInfo.activityBarWidth;
-			} else {
-				// otherwise adjust for other parts sizes if not maximized
-				layoutInfo.auxiliaryBarWidth = Math.min(layoutInfo.auxiliaryBarWidth, window.innerWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.sideBarWidth));
+			#monaco-parts-splash {
+				position: fixed;
+				z-index: 9000;
+				inset: 0;
+				display: grid;
+				grid-template: "rail content" 1fr / 68px 1fr;
+				overflow: hidden;
+				background: #0b0e14;
+				color: #d7dce6;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 			}
-			layoutInfo.sideBarWidth = Math.min(layoutInfo.sideBarWidth, window.innerWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.auxiliaryBarWidth));
-
-			// part: title
-			if (layoutInfo.titleBarHeight > 0) {
-				const titleDiv = document.createElement('div');
-				titleDiv.style.position = 'absolute';
-				titleDiv.style.width = '100%';
-				titleDiv.style.height = `${layoutInfo.titleBarHeight}px`;
-				titleDiv.style.left = '0';
-				titleDiv.style.top = '0';
-				titleDiv.style.backgroundColor = `${colorInfo.titleBarBackground}`;
-				(titleDiv.style as CSSStyleDeclaration & { '-webkit-app-region': string })['-webkit-app-region'] = 'drag';
-				splash.appendChild(titleDiv);
-
-				if (colorInfo.titleBarBorder) {
-					const titleBorder = document.createElement('div');
-					titleBorder.style.position = 'absolute';
-					titleBorder.style.width = '100%';
-					titleBorder.style.height = '1px';
-					titleBorder.style.left = '0';
-					titleBorder.style.bottom = '0';
-					titleBorder.style.borderBottom = `1px solid ${colorInfo.titleBarBorder}`;
-					titleDiv.appendChild(titleBorder);
-				}
+			.bold-initial-rail {
+				grid-area: rail;
+				display: flex;
+				box-sizing: border-box;
+				flex-direction: column;
+				align-items: center;
+				gap: 18px;
+				padding: 47px 8px 12px;
+				border-right: 1px solid #20252f;
+				background: #0e1219;
 			}
-
-			// part: activity bar
-			if (layoutInfo.activityBarWidth > 0) {
-				const activityDiv = document.createElement('div');
-				activityDiv.style.position = 'absolute';
-				activityDiv.style.width = `${layoutInfo.activityBarWidth}px`;
-				activityDiv.style.height = `calc(100% - ${layoutInfo.titleBarHeight + layoutInfo.statusBarHeight}px)`;
-				activityDiv.style.top = `${layoutInfo.titleBarHeight}px`;
-				if (layoutInfo.sideBarSide === 'left') {
-					activityDiv.style.left = '0';
-				} else {
-					activityDiv.style.right = '0';
-				}
-				activityDiv.style.backgroundColor = `${colorInfo.activityBarBackground}`;
-				splash.appendChild(activityDiv);
-
-				if (colorInfo.activityBarBorder) {
-					const activityBorderDiv = document.createElement('div');
-					activityBorderDiv.style.position = 'absolute';
-					activityBorderDiv.style.width = '1px';
-					activityBorderDiv.style.height = '100%';
-					activityBorderDiv.style.top = '0';
-					if (layoutInfo.sideBarSide === 'left') {
-						activityBorderDiv.style.right = '0';
-						activityBorderDiv.style.borderRight = `1px solid ${colorInfo.activityBarBorder}`;
-					} else {
-						activityBorderDiv.style.left = '0';
-						activityBorderDiv.style.borderLeft = `1px solid ${colorInfo.activityBarBorder}`;
-					}
-					activityDiv.appendChild(activityBorderDiv);
-				}
+			.bold-initial-brand,
+			.bold-initial-mark {
+				display: grid;
+				place-items: center;
+				border: 1px solid #5897ff;
+				background: linear-gradient(145deg, #4f91ff, #2456b8);
+				box-shadow: 0 10px 28px rgb(43 105 222 / 28%);
+				color: #fff;
+				font-weight: 750;
 			}
-
-			// part: side bar
-			if (layoutInfo.sideBarWidth > 0) {
-				const sideDiv = document.createElement('div');
-				sideDiv.style.position = 'absolute';
-				sideDiv.style.width = `${layoutInfo.sideBarWidth}px`;
-				sideDiv.style.height = `calc(100% - ${layoutInfo.titleBarHeight + layoutInfo.statusBarHeight}px)`;
-				sideDiv.style.top = `${layoutInfo.titleBarHeight}px`;
-				if (layoutInfo.sideBarSide === 'left') {
-					sideDiv.style.left = `${layoutInfo.activityBarWidth}px`;
-				} else {
-					sideDiv.style.right = `${layoutInfo.activityBarWidth}px`;
-				}
-				sideDiv.style.backgroundColor = `${colorInfo.sideBarBackground}`;
-				splash.appendChild(sideDiv);
-
-				if (colorInfo.sideBarBorder) {
-					const sideBorderDiv = document.createElement('div');
-					sideBorderDiv.style.position = 'absolute';
-					sideBorderDiv.style.width = '1px';
-					sideBorderDiv.style.height = '100%';
-					sideBorderDiv.style.top = '0';
-					sideBorderDiv.style.right = '0';
-					if (layoutInfo.sideBarSide === 'left') {
-						sideBorderDiv.style.borderRight = `1px solid ${colorInfo.sideBarBorder}`;
-					} else {
-						sideBorderDiv.style.left = '0';
-						sideBorderDiv.style.borderLeft = `1px solid ${colorInfo.sideBarBorder}`;
-					}
-					sideDiv.appendChild(sideBorderDiv);
-				}
+			.bold-initial-brand {
+				width: 38px;
+				height: 38px;
+				border-radius: 12px;
 			}
-
-			// part: auxiliary sidebar
-			if (layoutInfo.auxiliaryBarWidth > 0) {
-				const auxSideDiv = document.createElement('div');
-				auxSideDiv.style.position = 'absolute';
-				auxSideDiv.style.width = `${layoutInfo.auxiliaryBarWidth}px`;
-				auxSideDiv.style.height = `calc(100% - ${layoutInfo.titleBarHeight + layoutInfo.statusBarHeight}px)`;
-				auxSideDiv.style.top = `${layoutInfo.titleBarHeight}px`;
-				if (layoutInfo.sideBarSide === 'left') {
-					auxSideDiv.style.right = '0';
-				} else {
-					auxSideDiv.style.left = '0';
-				}
-				auxSideDiv.style.backgroundColor = `${colorInfo.sideBarBackground}`;
-				splash.appendChild(auxSideDiv);
-
-				if (colorInfo.sideBarBorder) {
-					const auxSideBorderDiv = document.createElement('div');
-					auxSideBorderDiv.style.position = 'absolute';
-					auxSideBorderDiv.style.width = '1px';
-					auxSideBorderDiv.style.height = '100%';
-					auxSideBorderDiv.style.top = '0';
-					if (layoutInfo.sideBarSide === 'left') {
-						auxSideBorderDiv.style.left = '0';
-						auxSideBorderDiv.style.borderLeft = `1px solid ${colorInfo.sideBarBorder}`;
-					} else {
-						auxSideBorderDiv.style.right = '0';
-						auxSideBorderDiv.style.borderRight = `1px solid ${colorInfo.sideBarBorder}`;
-					}
-					auxSideDiv.appendChild(auxSideBorderDiv);
-				}
+			.bold-initial-rail-item {
+				display: grid;
+				width: 34px;
+				height: 34px;
+				place-items: center;
+				border-radius: 10px;
+				color: #77808e;
+				font-size: 13px;
 			}
-
-			// part: statusbar
-			if (layoutInfo.statusBarHeight > 0) {
-				const statusDiv = document.createElement('div');
-				statusDiv.style.position = 'absolute';
-				statusDiv.style.width = '100%';
-				statusDiv.style.height = `${layoutInfo.statusBarHeight}px`;
-				statusDiv.style.bottom = '0';
-				statusDiv.style.left = '0';
-				if (configuration.workspace && colorInfo.statusBarBackground) {
-					statusDiv.style.backgroundColor = colorInfo.statusBarBackground;
-				} else if (!configuration.workspace && colorInfo.statusBarNoFolderBackground) {
-					statusDiv.style.backgroundColor = colorInfo.statusBarNoFolderBackground;
-				}
-				splash.appendChild(statusDiv);
-
-				if (colorInfo.statusBarBorder) {
-					const statusBorderDiv = document.createElement('div');
-					statusBorderDiv.style.position = 'absolute';
-					statusBorderDiv.style.width = '100%';
-					statusBorderDiv.style.height = '1px';
-					statusBorderDiv.style.top = '0';
-					statusBorderDiv.style.borderTop = `1px solid ${colorInfo.statusBarBorder}`;
-					statusDiv.appendChild(statusBorderDiv);
-				}
+			.bold-initial-rail-spacer {
+				flex: 1;
 			}
+			.bold-initial-explorer {
+				display: none;
+				box-sizing: border-box;
+				flex-direction: column;
+				gap: 10px;
+				padding: 12px 12px 10px 16px;
+				border-right: 1px solid #20252f;
+				background: #11151c;
+			}
+			.bold-initial-eyebrow {
+				color: #667080;
+				font-size: 10px;
+				font-weight: 700;
+				letter-spacing: .12em;
+			}
+			.bold-initial-explorer strong {
+				margin-bottom: 6px;
+				font-size: 13px;
+			}
+			.bold-initial-tree-row {
+				height: 8px;
+				border-radius: 999px;
+				background: #252b35;
+				opacity: .72;
+			}
+			.bold-initial-topbar {
+				display: none;
+				align-items: end;
+				padding: 0 10px;
+				border-bottom: 1px solid #20252f;
+				background: #0d1016;
+				-webkit-app-region: drag;
+			}
+			.bold-initial-tab {
+				min-width: 150px;
+				padding: 12px 16px 11px;
+				border: 1px solid #252b35;
+				border-bottom: 0;
+				border-radius: 10px 10px 0 0;
+				color: #8e98a8;
+				font-size: 12px;
+			}
+			.bold-initial-content {
+				grid-area: content;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 12px;
+				margin: 0;
+				border: 0;
+				background: #11151b;
+			}
+			.bold-initial-mark {
+				position: relative;
+				width: 70px;
+				height: 70px;
+				border-radius: 22px;
+				font-size: 13px;
+				animation: bold-initial-breathe 1.8s ease-in-out infinite;
+			}
+			.bold-initial-mark::after {
+				position: absolute;
+				inset: -7px;
+				border: 1px solid rgb(88 151 255 / 36%);
+				border-radius: 27px;
+				content: '';
+				animation: bold-initial-ring 1.8s ease-out infinite;
+			}
+			.bold-initial-content strong {
+				font-size: 17px;
+			}
+			.bold-initial-content span:last-child {
+				color: #707b8b;
+				font-size: 12px;
+			}
+			@keyframes bold-initial-breathe {
+				50% { transform: translateY(-3px); }
+			}
+			@keyframes bold-initial-ring {
+				0% { opacity: .8; transform: scale(.88); }
+				75%, 100% { opacity: 0; transform: scale(1.16); }
+			}
+		`;
+		window.document.head.appendChild(style);
 
-			window.document.body.appendChild(splash);
+		const splash = document.createElement('div');
+		splash.id = 'monaco-parts-splash';
+
+		const rail = document.createElement('div');
+		rail.className = 'bold-initial-rail';
+		const brand = document.createElement('span');
+		brand.className = 'bold-initial-brand';
+		brand.textContent = 'B';
+		rail.append(brand);
+		for (const label of ['C', 'X']) {
+			const item = document.createElement('span');
+			item.className = 'bold-initial-rail-item';
+			item.textContent = label;
+			rail.append(item);
 		}
+		const railSpacer = document.createElement('span');
+		railSpacer.className = 'bold-initial-rail-spacer';
+		const settings = document.createElement('span');
+		settings.className = 'bold-initial-rail-item';
+		settings.textContent = '⚙';
+		rail.append(railSpacer, settings);
+
+		const explorer = document.createElement('aside');
+		explorer.className = 'bold-initial-explorer';
+		const eyebrow = document.createElement('span');
+		eyebrow.className = 'bold-initial-eyebrow';
+		eyebrow.textContent = 'WORKSPACE';
+		const workspace = document.createElement('strong');
+		workspace.textContent = 'Bold Code';
+		explorer.append(eyebrow, workspace);
+		for (let index = 0; index < 8; index++) {
+			const row = document.createElement('span');
+			row.className = 'bold-initial-tree-row';
+			row.style.width = `${52 + ((index * 17) % 38)}%`;
+			explorer.append(row);
+		}
+
+		const topbar = document.createElement('header');
+		topbar.className = 'bold-initial-topbar';
+		const tab = document.createElement('span');
+		tab.className = 'bold-initial-tab';
+		tab.textContent = 'Welcome';
+		topbar.append(tab);
+
+		const content = document.createElement('main');
+		content.className = 'bold-initial-content';
+		const mark = document.createElement('span');
+		mark.className = 'bold-initial-mark';
+		mark.textContent = 'AI';
+		const title = document.createElement('strong');
+		title.textContent = '正在加载 Agent';
+		const detail = document.createElement('span');
+		detail.textContent = 'Bold 界面正在启动，随后将接入扩展 Web…';
+		content.append(mark, title, detail);
+
+		splash.append(rail, explorer, topbar, content);
+		window.document.body.appendChild(splash);
 	}
 
 	//#endregion

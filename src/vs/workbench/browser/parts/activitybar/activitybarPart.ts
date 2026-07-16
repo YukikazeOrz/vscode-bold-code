@@ -39,17 +39,21 @@ import { IExtensionService } from '../../../services/extensions/common/extension
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { SwitchCompositeViewAction } from '../compositeBarActions.js';
+import { FONT, getFontSize, updateActivityBarSize } from '../../../../base/common/font.js';
 
 export class ActivitybarPart extends Part {
 
 	static readonly ACTION_HEIGHT = 48;
 	static readonly COMPACT_ACTION_HEIGHT = 32;
+	static readonly COMPACT_ACTION_HEIGHT_RATIO = 32/48;
 
 	static readonly ACTIVITYBAR_WIDTH = 48;
 	static readonly COMPACT_ACTIVITYBAR_WIDTH = 36;
+	static readonly COMPACT_ACTIVITYBAR_WIDTH_RATIO = 36/48;
 
 	static readonly ICON_SIZE = 24;
 	static readonly COMPACT_ICON_SIZE = 16;
+	static readonly COMPACT_ICON_SIZE_RATIO = 16/24;
 
 	/**
 	 * Gutter reserved on the left and bottom edges under the floating panels
@@ -73,7 +77,7 @@ export class ActivitybarPart extends Part {
 	//#endregion
 
 	/** The intrinsic activity bar width (excludes any floating gutter). */
-	private get baseWidth(): number { return this._isCompact ? ActivitybarPart.COMPACT_ACTIVITYBAR_WIDTH : ActivitybarPart.ACTIVITYBAR_WIDTH; }
+	private get baseWidth(): number { return this._isCompact ? FONT.activityBarSize48 * ActivitybarPart.COMPACT_ACTIVITYBAR_WIDTH_RATIO : FONT.activityBarSize48; }
 
 	/** Extra space reserved around the part when the floating panels experiment is enabled. */
 	private get floatingGutter(): number { return this.layoutService.isFloatingPanelsEnabled() ? ActivitybarPart.FLOATING_MARGIN : 0; }
@@ -109,14 +113,23 @@ export class ActivitybarPart extends Part {
 				this._onDidChange.fire(undefined);
 			}
 		}));
+
+		this._register(configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('workbench.activityBar.experimental.fontFamily') || e.affectsConfiguration('workbench.activityBar.experimental.fontSize')) {
+				this.applyActivityBarFontFamily();
+				this.applyActivityBarFontSize();
+				this.recreateCompositeBar();
+				this._onDidChange.fire(undefined); // Signal grid that size constraints changed
+			}
+		}));
 	}
 
 	private updateCompactStyle(): void {
 		if (this.element) {
 			this.element.classList.toggle('compact', this._isCompact);
 			this.element.style.setProperty('--activity-bar-width', `${this.baseWidth}px`);
-			this.element.style.setProperty('--activity-bar-action-height', `${this._isCompact ? ActivitybarPart.COMPACT_ACTION_HEIGHT : ActivitybarPart.ACTION_HEIGHT}px`);
-			this.element.style.setProperty('--activity-bar-icon-size', `${this._isCompact ? ActivitybarPart.COMPACT_ICON_SIZE : ActivitybarPart.ICON_SIZE}px`);
+			this.element.style.setProperty('--activity-bar-action-height', `${this._isCompact ? FONT.activityBarSize32 : FONT.activityBarSize48}px`);
+			this.element.style.setProperty('--activity-bar-icon-size', `${this._isCompact ? FONT.activityBarSize : FONT.activityBarSize24}px`);
 		}
 	}
 
@@ -153,6 +166,16 @@ export class ActivitybarPart extends Part {
 			preventLoopNavigation: true,
 			recomputeSizes: false,
 			fillExtraContextMenuActions: (actions, e?: MouseEvent | GestureEvent) => { },
+			// Debug/testing and bundled AI entry points are opt-in surfaces -- none of these
+			// should compete for activity bar space until the user actually turns them on / uses them.
+			defaultUnpinnedViewContainerIds: [
+				'workbench.view.debug',
+				'workbench.view.extension.test',
+				'workbench.view.aiHub',
+				'workbench.view.extension.claude-sidebar',
+				'workbench.view.extension.claude-sessions-sidebar',
+				'workbench.view.extension.codexViewContainer',
+			],
 			compositeSize: 52,
 			colors: (theme: IColorTheme) => ({
 				activeForegroundColor: theme.getColor(ACTIVITY_BAR_FOREGROUND),
@@ -172,6 +195,10 @@ export class ActivitybarPart extends Part {
 		this.element = parent;
 		this.content = append(this.element, $('.content'));
 
+		// Apply font settings before show() so composite bar uses correct sizes
+		this.applyActivityBarFontFamily(parent);
+		this.applyActivityBarFontSize(parent);
+
 		this.updateCompactStyle();
 
 		if (this.layoutService.isVisible(Parts.ACTIVITYBAR_PART)) {
@@ -179,6 +206,38 @@ export class ActivitybarPart extends Part {
 		}
 
 		return this.content;
+	}
+
+	private applyActivityBarFontFamily(container?: HTMLElement): void {
+		const target = container ?? this.getContainer();
+		if (!target) {
+			return;
+		}
+
+		const family = this.configurationService.getValue<string>('workbench.activityBar.experimental.fontFamily');
+
+		if (family) {
+			target.style.setProperty('--vscode-workbench-activitybar-font-family', family);
+		} else {
+			target.style.removeProperty('--vscode-workbench-activitybar-font-family');
+		}
+
+		this._onDidChange.fire(undefined); // Signal grid that size constraints changed
+	}
+
+	private applyActivityBarFontSize(container?: HTMLElement): void {
+		const target = container ?? this.getContainer();
+		if (!target) {
+			return;
+		}
+
+		const configuredSize = getFontSize(this.configurationService, 'workbench.activityBar.experimental.fontSize', FONT.defaultActivityBarSize);
+
+		updateActivityBarSize(configuredSize);
+
+		target.style.setProperty('--vscode-workbench-activitybar-font-size', `${FONT.activityBarSize}px`);
+
+		this._onDidChange.fire(undefined); // Signal grid that size constraints changed
 	}
 
 	getPinnedPaneCompositeIds(): string[] {

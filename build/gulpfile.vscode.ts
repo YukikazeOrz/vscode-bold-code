@@ -25,10 +25,10 @@ import { getProductionDependencies } from './lib/dependencies.ts';
 import { config } from './lib/electron.ts';
 import { createAsar } from './lib/asar.ts';
 import minimist from 'minimist';
-import { compileBuildWithoutManglingTask, compileBuildWithManglingTask } from './gulpfile.compile.ts';
-import { compileNonNativeExtensionsBuildTask, compileNativeExtensionsBuildTask, compileAllExtensionsBuildTask, compileExtensionMediaBuildTask, cleanExtensionsBuildTask, compileCopilotExtensionBuildTask } from './gulpfile.extensions.ts';
+import { compileBuildWithoutManglingTask } from './gulpfile.compile.ts';
+import { compileNonNativeExtensionsBuildTask, compileNativeExtensionsBuildTask, compileAllExtensionsBuildTask, compileExtensionMediaBuildTask, cleanExtensionsBuildTask } from './gulpfile.extensions.ts';
 import { copyCodiconsTask } from './lib/compilation.ts';
-import { getCopilotExcludeFilter, getCopilotRuntimePrebuildFiles, getCopilotTgrepExcludeFilter, getRipgrepExcludeFilter, prepareBuiltInCopilotRipgrepShim } from './lib/copilot.ts';
+import { getRipgrepExcludeFilter } from './lib/copilot.ts';
 import { readAgentSdkResults } from './agent-sdk/common.ts';
 import { useEsbuildTranspile } from './buildConfig.ts';
 import { promisify } from 'util';
@@ -163,7 +163,7 @@ const bundleVSCodeTask = task.define('bundle-vscode', task.series(
 ));
 task.task(bundleVSCodeTask);
 
-const sourceMappingURLBase = `https://main.vscode-cdn.net/sourcemaps/${commit}`;
+const sourceMappingURLBase = `https://github.com/VSCodium/sourcemaps/releases/download/${product.quality}-${commit}`;
 const isCI = !!process.env['CI'] || !!process.env['BUILD_ARTIFACTSTAGINGDIRECTORY'] || !!process.env['GITHUB_WORKSPACE'];
 const useCdnSourceMapsForPackagingTasks = isCI;
 const stripSourceMapsInPackagingTasks = isCI;
@@ -259,16 +259,29 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			.pipe(rename(function (path) { path.dirname = path.dirname!.replace(new RegExp('^' + out), 'out'); }))
 			.pipe(util.setExecutableBit(['**/*.sh']));
 
-		const platformSpecificBuiltInExtensionsExclusions = product.builtInExtensions.filter(ext => {
-			if (!(ext as { platforms?: string[] }).platforms) {
-				return false;
-			}
-
-			const set = new Set((ext as { platforms?: string[] }).platforms);
-			return !set.has(platform);
-		}).map(ext => `!.build/extensions/${ext.name}/**`);
-
-		const extensions = gulp.src(['.build/extensions/**', ...platformSpecificBuiltInExtensionsExclusions], { base: '.build', dot: true });
+		const remoteSSHInstallScript = '.build/extensions/jeanp413.open-remote-ssh/lib/extension.js';
+		// The agent-only product does not expose the editor, so shipping every local
+		// language, theme, notebook and source-control extension only increases the
+		// installer size. Package precisely the extensions declared by product.json,
+		// plus their shared production dependencies. This keeps Claude, Codex,
+		// Chinese localization, debugging support and Remote SSH intact.
+		const packagedBuiltInExtensions = product.builtInExtensions
+			.filter(ext => {
+				const platforms = (ext as { platforms?: string[] }).platforms;
+				return !platforms || platforms.includes(platform);
+			})
+			.map(ext => `.build/extensions/${ext.name}/**`);
+		const extensions = es.merge(
+			gulp.src([
+				...packagedBuiltInExtensions,
+				'.build/extensions/node_modules/**',
+				`!${remoteSSHInstallScript}`,
+			], { base: '.build', dot: true }),
+			gulp.src(remoteSSHInstallScript, { base: '.build', dot: true })
+				.pipe(replace(/MODIFY_PRODUCT_JSON:"force"===p\?"\$true":"\$false"/g, 'MODIFY_PRODUCT_JSON:"$true"'))
+				.pipe(replace(/MODIFY_PRODUCT_JSON:"force"===p\?"true":"false"/g, 'MODIFY_PRODUCT_JSON:"true"'))
+				.pipe(replace(/var n=r\(5951\)\.navigator,i=n&&n\.userAgent/g, 'var n,i=n&&n.userAgent')),
+		);
 
 		const sourceFilterPattern = stripSourceMapsInPackagingTasks
 			? ['**', '!**/*.{js,css}.map']
@@ -305,6 +318,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				json.date = readISODate(out);
 				json.checksums = checksums;
 				json.version = version;
+				json.serverDownloadUrlTemplate = 'https://github.com/VSCodium/vscodium/releases/download/1.126.04524/vscodium-reh-${os}-${arch}-1.126.04524.tar.gz';
 				// Stamp agentSdks from the per-platform results file produced
 				// by `build/agent-sdk/produce.ts` (an earlier pipeline step).
 				// Local dev: file absent → empty → not stamped.
@@ -340,10 +354,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			.pipe(filter(depFilterPattern))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, '.moduleignore')))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, `.moduleignore.${process.platform}`)));
-		const copilotRuntimePrebuilds = gulp.src(getCopilotRuntimePrebuildFiles(platform, arch), { base: '.', dot: true, allowEmpty: true });
-		const deps = es.merge(cleanedDeps, copilotRuntimePrebuilds)
-			.pipe(filter(getCopilotExcludeFilter(platform, arch)))
-			.pipe(filter(getCopilotTgrepExcludeFilter(platform, arch)))
+		const deps = cleanedDeps
 			.pipe(filter(getRipgrepExcludeFilter(platform, arch)))
 			.pipe(jsFilter)
 			.pipe(util.rewriteSourceMappingURL(sourceMappingURLBase))
@@ -357,7 +368,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				'**/node-pty/lib/worker/conoutSocketWorker.js',
 				'**/node-pty/lib/shared/conout.js',
 				'**/*.wasm',
-				'**/@vscode/vsce-sign/bin/*',
+				'**/@vscodium/vsce-sign/bin/*',
 			], [
 				'**/*.mk',
 				'!node_modules/vsda/**' // stay compatible with extensions that depend on us shipping `vsda` into ASAR
@@ -417,7 +428,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			const shortcut = gulp.src('resources/darwin/bin/code.sh')
 				.pipe(replace('@@APPNAME@@', product.applicationName))
 				.pipe(replace('@@NAME@@', product.nameShort))
-				.pipe(rename('bin/code'));
+				.pipe(rename('bin/' + product.applicationName));
 			const policyDest = gulp.src('.build/policies/darwin/**', { base: '.build/policies/darwin' })
 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`));
 			all = es.merge(all, shortcut, policyDest);
@@ -601,23 +612,6 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 	};
 }
 
-function prepareCopilotRipgrepShimTask(platform: string, arch: string, destinationFolderName: string) {
-	const outputDir = path.join(path.dirname(root), destinationFolderName);
-
-	return async () => {
-		// On Windows with win32VersionedUpdate, app resources live under a
-		// commit-hash prefix: {output}/{commitHash}/resources/app/
-		const versionedResourcesFolder = util.getVersionedResourcesFolder(platform, commit!);
-		const appBase = platform === 'darwin'
-			? path.join(outputDir, `${product.nameLong}.app`, 'Contents', 'Resources', 'app')
-			: path.join(outputDir, versionedResourcesFolder, 'resources', 'app');
-		const appNodeModulesDir = path.join(appBase, 'node_modules');
-
-		const builtInCopilotExtensionDir = path.join(appBase, 'extensions', 'copilot');
-		prepareBuiltInCopilotRipgrepShim(platform, arch, builtInCopilotExtensionDir, appNodeModulesDir);
-	};
-}
-
 const buildRoot = path.dirname(root);
 
 const BUILD_TARGETS = [
@@ -643,7 +637,6 @@ BUILD_TARGETS.forEach(buildTarget => {
 			compileNativeExtensionsBuildTask,
 			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts),
-			prepareCopilotRipgrepShimTask(platform, arch, destinationFolderName)
 		];
 
 		if (platform === 'win32') {
@@ -654,6 +647,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 		task.task(vscodeTaskCI);
 
 		let vscodeTask: task.Task;
+
 		if (useEsbuildTranspile) {
 			const esbuildBundleTask = task.define(
 				`esbuild-bundle${dashed(platform)}${dashed(arch)}${dashed(minified)}`,
@@ -665,27 +659,48 @@ BUILD_TARGETS.forEach(buildTarget => {
 					minified && useCdnSourceMapsForPackagingTasks ? `${sourceMappingURLBase}/core` : undefined
 				)
 			);
-			vscodeTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
+
+			const prepackTask = task.define(`vscode${dashed(minified)}-prepack`, task.series(
 				copyCodiconsTask,
 				cleanExtensionsBuildTask,
 				compileNonNativeExtensionsBuildTask,
 				compileCopilotExtensionBuildTask,
 				compileExtensionMediaBuildTask,
+			));
+			task.task(prepackTask);
+
+			const packingTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}-packing`, task.series(
 				writeISODate('out-build'),
 				esbuildBundleTask,
 				vscodeTaskCI
 			));
-		} else {
+			task.task(packingTask);
+
 			vscodeTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
-				minified ? compileBuildWithManglingTask : compileBuildWithoutManglingTask,
+				prepackTask,
+				packingTask,
+			));
+		} else {
+			const prepackTask = task.define(`vscode${dashed(minified)}-prepack`, task.series(
+				compileBuildWithoutManglingTask,
 				cleanExtensionsBuildTask,
 				compileNonNativeExtensionsBuildTask,
-				compileCopilotExtensionBuildTask,
 				compileExtensionMediaBuildTask,
 				minified ? minifyVSCodeTask : bundleVSCodeTask,
+			));
+			task.task(prepackTask);
+
+			const packingTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}-packing`, task.series(
 				vscodeTaskCI
 			));
+			task.task(packingTask);
+
+			vscodeTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
+				prepackTask,
+				packingTask,
+			));
 		}
+
 		task.task(vscodeTask);
 
 		return vscodeTask;

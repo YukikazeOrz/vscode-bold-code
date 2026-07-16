@@ -512,6 +512,12 @@ export interface IBrowserViewService {
 	getSelectedText(id: string): Promise<string>;
 
 	/**
+	 * Execute JavaScript in the browser view's main world and return a
+	 * JSON-serializable result. Intended for trusted workbench integrations.
+	 */
+	executeJavaScript(id: string, script: string): Promise<unknown>;
+
+	/**
 	 * Clear all storage data for the global browser session
 	 */
 	clearGlobalStorage(): Promise<void>;

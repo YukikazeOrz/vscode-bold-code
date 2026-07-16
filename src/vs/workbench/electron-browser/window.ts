@@ -256,8 +256,8 @@ export class NativeWindow extends BaseWindow {
 					label: localize('downloadArmBuild', "Download"),
 					run: () => {
 						const quality = this.productService.quality;
-						const stableURL = 'https://code.visualstudio.com/docs/?dv=osx';
-						const insidersURL = 'https://code.visualstudio.com/docs/?dv=osx&build=insiders';
+						const stableURL = 'https://github.com/YukikazeOrz/vscode-bold-code/releases/latest';
+						const insidersURL = 'https://github.com/YukikazeOrz/vscode-bold-code-insiders/releases/latest';
 						this.openerService.open(quality === 'stable' ? stableURL : insidersURL);
 					}
 				}],

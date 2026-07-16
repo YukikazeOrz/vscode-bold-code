@@ -111,6 +111,9 @@ export interface IProductConfiguration {
 	readonly walkthroughMetadata?: IProductWalkthrough[];
 	readonly featuredExtensions?: IFeaturedExtension[];
 
+	readonly aiGatewayUrl?: string;
+	readonly bundledAiExtensions?: readonly { readonly id: string; readonly displayName: string }[];
+
 	readonly downloadUrl?: string;
 	readonly updateUrl?: string;
 	readonly webUrl?: string;
@@ -135,6 +138,8 @@ export interface IProductConfiguration {
 		readonly resourceUrlTemplate: string;
 		readonly nlsBaseUrl: string;
 		readonly accessSKUs?: string[];
+		readonly itemUrl: string;
+		readonly latestUrlTemplate?: string;
 	};
 
 	readonly agentSdks?: { readonly [packageId: string]: IAgentSdkProductConfig };

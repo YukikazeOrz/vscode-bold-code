@@ -83,6 +83,12 @@ export interface IPaneCompositeBarOptions {
 	readonly activityHoverOptions: IActivityHoverOptions;
 	readonly fillExtraContextMenuActions: (actions: IAction[], e?: MouseEvent | GestureEvent) => void;
 	readonly colors: (theme: IColorTheme) => ICompositeBarColors;
+	/**
+	 * View container ids that should start out unpinned/hidden instead of the usual
+	 * "pin every newly-registered container" default. Existing profiles are migrated once,
+	 * then any later user pinning choice is respected.
+	 */
+	readonly defaultUnpinnedViewContainerIds?: readonly string[];
 }
 
 export class PaneCompositeBar extends Disposable {
@@ -434,6 +440,10 @@ export class PaneCompositeBar extends Disposable {
 		const viewContainer = isString(viewContainerOrId) ? this.getViewContainer(viewContainerOrId) : viewContainerOrId;
 		const viewContainerId = isString(viewContainerOrId) ? viewContainerOrId : viewContainerOrId.id;
 
+		if (this.shouldUseDefaultUnpinnedState(viewContainerId, cachedViewContainer) && !this.viewService.isViewContainerActive(viewContainerId)) {
+			return true;
+		}
+
 		if (viewContainer) {
 			if (viewContainer.hideIfEmpty) {
 				if (this.viewService.isViewContainerActive(viewContainerId)) {
@@ -563,7 +573,7 @@ export class PaneCompositeBar extends Disposable {
 						id: viewContainer.id,
 						name: typeof viewContainer.title === 'string' ? viewContainer.title : viewContainer.title.value,
 						order: viewContainer.order,
-						pinned: true,
+						pinned: !this.isDefaultUnpinnedViewContainer(viewContainer.id),
 						visible: !this.shouldBeHidden(viewContainer),
 					});
 				}
@@ -690,11 +700,81 @@ export class PaneCompositeBar extends Disposable {
 	}
 
 	private getStoredPinnedViewContainersValue(): string {
-		return this.storageService.get(this.options.pinnedViewContainersKey, StorageScope.PROFILE, '[]');
+		const stored = this.storageService.get(this.options.pinnedViewContainersKey, StorageScope.PROFILE);
+		if (stored !== undefined) {
+			return this.migrateDefaultUnpinnedViewContainers(stored);
+		}
+		if (this.options.defaultUnpinnedViewContainerIds?.length) {
+			return JSON.stringify(this.options.defaultUnpinnedViewContainerIds.map(id => ({ id, pinned: false, visible: false })));
+		}
+		return '[]';
 	}
 
 	private setStoredPinnedViewContainersValue(value: string): void {
 		this.storageService.store(this.options.pinnedViewContainersKey, value, StorageScope.PROFILE, StorageTarget.USER);
+	}
+
+	private isDefaultUnpinnedViewContainer(id: string): boolean {
+		return !!this.options.defaultUnpinnedViewContainerIds?.includes(id);
+	}
+
+	private shouldUseDefaultUnpinnedState(id: string, cachedViewContainer?: ICachedViewContainer): boolean {
+		if (!this.isDefaultUnpinnedViewContainer(id)) {
+			return false;
+		}
+
+		cachedViewContainer = cachedViewContainer || this.cachedViewContainers.find(cached => cached.id === id);
+		return !cachedViewContainer || (!cachedViewContainer.pinned && !cachedViewContainer.visible);
+	}
+
+	private migrateDefaultUnpinnedViewContainers(stored: string): string {
+		const defaultUnpinnedViewContainerIds = this.options.defaultUnpinnedViewContainerIds;
+		if (!defaultUnpinnedViewContainerIds?.length) {
+			return stored;
+		}
+
+		const migrationKey = `${this.options.pinnedViewContainersKey}.defaultUnpinnedViewContainerIds`;
+		const migrationSignature = defaultUnpinnedViewContainerIds.join(',');
+		if (this.storageService.get(migrationKey, StorageScope.PROFILE) === migrationSignature) {
+			return stored;
+		}
+
+		try {
+			const defaultUnpinnedViewContainerIdSet = new Set(defaultUnpinnedViewContainerIds);
+			const pinnedViewContainers = JSON.parse(stored) as IPinnedViewContainer[];
+			const existingIds = new Set(pinnedViewContainers.map(({ id }) => id));
+			let changed = false;
+
+			const migrated = pinnedViewContainers.map(item => {
+				if (!defaultUnpinnedViewContainerIdSet.has(item.id)) {
+					return item;
+				}
+				if (!item.pinned && !item.visible) {
+					return item;
+				}
+				changed = true;
+				return { ...item, pinned: false, visible: false };
+			});
+
+			for (const id of defaultUnpinnedViewContainerIds) {
+				if (!existingIds.has(id)) {
+					migrated.push({ id, pinned: false, visible: false });
+					changed = true;
+				}
+			}
+
+			this.storageService.store(migrationKey, migrationSignature, StorageScope.PROFILE, StorageTarget.USER);
+			if (!changed) {
+				return stored;
+			}
+
+			const migratedValue = JSON.stringify(migrated);
+			this.setStoredPinnedViewContainersValue(migratedValue);
+			return migratedValue;
+		} catch {
+			this.storageService.store(migrationKey, migrationSignature, StorageScope.PROFILE, StorageTarget.USER);
+			return stored;
+		}
 	}
 
 	private getPlaceholderViewContainers(): IPlaceholderViewContainer[] {

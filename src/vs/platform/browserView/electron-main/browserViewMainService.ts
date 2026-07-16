@@ -277,6 +277,10 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 		return this._getBrowserView(id).getSelectedText();
 	}
 
+	async executeJavaScript(id: string, script: string): Promise<unknown> {
+		return this._getBrowserView(id).executeJavaScript(script);
+	}
+
 	async clearStorage(id: string): Promise<void> {
 		return this._getBrowserView(id).clearStorage();
 	}

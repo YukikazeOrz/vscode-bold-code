@@ -854,6 +854,10 @@ export class BrowserView extends Disposable {
 		}
 	}
 
+	async executeJavaScript(script: string): Promise<unknown> {
+		return this._view.webContents.executeJavaScript(script, true);
+	}
+
 	/**
 	 * Clear all storage data for this browser view's session
 	 */

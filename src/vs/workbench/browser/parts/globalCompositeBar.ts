@@ -236,7 +236,7 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
 	private async run(): Promise<void> {
 		const disposables = new DisposableStore();
 		const menu = disposables.add(this.menuService.createMenu(this.menuId, this.contextKeyService));
-		const actions = await this.resolveMainMenuActions(menu, disposables);
+		const actions = removeCheckForUpdatesActions(await this.resolveMainMenuActions(menu, disposables));
 		const { anchorAlignment, anchorAxisAlignment } = this.contextMenuAlignmentOptions() ?? { anchorAlignment: undefined, anchorAxisAlignment: undefined };
 
 		this.contextMenuService.showContextMenu({
@@ -253,6 +253,16 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
 	protected async resolveMainMenuActions(menu: IMenu, _disposable: DisposableStore): Promise<IAction[]> {
 		return getActionBarActions(menu.getActions({ renderShortTitle: true })).secondary;
 	}
+}
+
+function removeCheckForUpdatesActions(actions: IAction[]): IAction[] {
+	const filtered = actions.filter(action => action.id !== 'update.check' && action.id !== 'update.checkForUpdate');
+	return filtered.filter((action, index) => {
+		if (!(action instanceof Separator)) {
+			return true;
+		}
+		return index > 0 && index < filtered.length - 1 && !(filtered[index - 1] instanceof Separator);
+	});
 }
 
 export class AccountsActivityActionViewItem extends AbstractGlobalActivityActionViewItem {
@@ -742,7 +752,9 @@ function simpleActivityContextMenuActions(storageService: IStorageService, isAcc
 }
 
 export function isAccountsActionVisible(storageService: IStorageService): boolean {
-	return storageService.getBoolean(AccountsActivityActionViewItem.ACCOUNTS_VISIBILITY_PREFERENCE_KEY, StorageScope.PROFILE, true);
+	// Defaults to hidden -- the user can re-enable it via the "Accounts" toggle on the
+	// Manage icon's context menu.
+	return storageService.getBoolean(AccountsActivityActionViewItem.ACCOUNTS_VISIBILITY_PREFERENCE_KEY, StorageScope.PROFILE, false);
 }
 
 function setAccountsActionVisible(storageService: IStorageService, visible: boolean) {

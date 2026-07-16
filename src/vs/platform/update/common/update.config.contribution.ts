@@ -63,12 +63,18 @@ configurationRegistry.registerConfiguration({
 			description: localize('updateMode', "Configure whether you receive automatic updates. Requires a restart after change. The updates are fetched from a Microsoft online service."),
 			deprecationMessage: localize('deprecated', "This setting is deprecated, please use '{0}' instead.", 'update.mode')
 		},
+		'update.minReleaseAge': {
+			type: 'integer',
+			default: 120,
+			scope: ConfigurationScope.APPLICATION,
+			description: localize('update.cooldown', "Control how old an update need to be before installing it (in hours)."),
+		},
 		'update.enableWindowsBackgroundUpdates': {
 			type: 'boolean',
 			default: true,
 			scope: ConfigurationScope.APPLICATION,
 			title: localize('enableWindowsBackgroundUpdatesTitle', "Enable Background Updates"),
-			description: localize('enableWindowsBackgroundUpdates', "Enable to download and install new VS Code versions in the background."),
+			description: localize('enableWindowsBackgroundUpdates', "Enable to download and install new VSCodium versions in the background."),
 			included: isWindows && !isWeb
 		},
 		'update.showReleaseNotes': {

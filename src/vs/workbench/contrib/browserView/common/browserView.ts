@@ -368,6 +368,7 @@ export interface IBrowserViewModel extends IDisposable {
 	findInPage(text: string, options?: IBrowserViewFindInPageOptions): Promise<void>;
 	stopFindInPage(keepSelection?: boolean): Promise<void>;
 	getSelectedText(): Promise<string>;
+	executeJavaScript(script: string): Promise<unknown>;
 	clearStorage(): Promise<void>;
 	setSharedWithAgent(shared: boolean): Promise<boolean>;
 	trustCertificate(host: string, fingerprint: string): Promise<void>;
@@ -712,6 +713,10 @@ export class BrowserViewModel extends Disposable implements IBrowserViewModel {
 
 	async getSelectedText(): Promise<string> {
 		return this.browserViewService.getSelectedText(this.id);
+	}
+
+	async executeJavaScript(script: string): Promise<unknown> {
+		return this.browserViewService.executeJavaScript(this.id, script);
 	}
 
 	async clearStorage(): Promise<void> {

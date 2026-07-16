@@ -18,6 +18,7 @@ import { IMessagePassingProtocol } from '../../../../base/parts/ipc/common/ipc.j
 import { BufferedEmitter } from '../../../../base/parts/ipc/common/ipc.net.js';
 import { acquirePort } from '../../../../base/parts/ipc/electron-browser/ipc.mp.js';
 import * as nls from '../../../../nls.js';
+import { IAiExtensionHostEnvironmentContributor } from '../../../../platform/environment/common/aiExtensionHostEnvironment.js';
 import { IExtensionHostDebugService } from '../../../../platform/debug/common/extensionHostDebug.js';
 import { extensionHostGraceTimeMs, IExtensionHostProcessOptions, IExtensionHostStarter } from '../../../../platform/extensions/common/extensionHostStarter.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
@@ -136,6 +137,7 @@ export class NativeLocalProcessExtensionHost extends Disposable implements IExte
 		@IHostService private readonly _hostService: IHostService,
 		@IProductService private readonly _productService: IProductService,
 		@IShellEnvironmentService private readonly _shellEnvironmentService: IShellEnvironmentService,
+		@IAiExtensionHostEnvironmentContributor private readonly _aiExtensionHostEnvironmentContributor: IAiExtensionHostEnvironmentContributor,
 		@IExtensionHostStarter private readonly _extensionHostStarter: IExtensionHostStarter,
 		@IDefaultLogLevelsService private readonly _defaultLogLevelsService: IDefaultLogLevelsService,
 	) {
@@ -219,17 +221,19 @@ export class NativeLocalProcessExtensionHost extends Disposable implements IExte
 	}
 
 	private async _start(): Promise<IMessagePassingProtocol> {
-		const [extensionHostCreationResult, portNumber, processEnv] = await Promise.all([
+		const [extensionHostCreationResult, portNumber, processEnv, aiEnvOverrides] = await Promise.all([
 			this._extensionHostStarter.createExtensionHost(),
 			this._tryFindDebugPort(),
 			this._shellEnvironmentService.getShellEnv(),
+			this._aiExtensionHostEnvironmentContributor.getEnvironmentOverrides(),
 		]);
 
 		this._extensionHostProcess = new ExtensionHostProcess(extensionHostCreationResult.id, this._extensionHostStarter);
 
 		const env = objects.mixin(processEnv, {
 			VSCODE_ESM_ENTRYPOINT: 'vs/workbench/api/node/extensionHostProcess',
-			VSCODE_HANDLES_UNCAUGHT_ERRORS: true
+			VSCODE_HANDLES_UNCAUGHT_ERRORS: true,
+			...aiEnvOverrides
 		});
 
 		if (this._environmentService.debugExtensionHost.env) {
