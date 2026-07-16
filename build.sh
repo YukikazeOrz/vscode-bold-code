@@ -122,5 +122,17 @@ if [[ "${PACKAGE}" == true ]]; then
 	esac
 
 	run_npm run gulp "vscode-${package_target}"
-	echo "Packaged app: ${ROOT_DIR}/.build/VSCode-${package_target}"
+
+	# VS Code's gulp packaging tasks intentionally write beside the source tree.
+	# Keep the final distributable inside this repository instead.
+	package_source="$(dirname "${ROOT_DIR}")/VSCode-${package_target}"
+	package_destination="${ROOT_DIR}/.build/packages"
+	if [[ ! -d "${package_source}" ]]; then
+		echo "Expected package was not created: ${package_source}" >&2
+		exit 1
+	fi
+	mkdir -p "${package_destination}"
+	rm -rf "${package_destination}/VSCode-${package_target}"
+	mv "${package_source}" "${package_destination}/"
+	echo "Packaged app: ${package_destination}/VSCode-${package_target}"
 fi

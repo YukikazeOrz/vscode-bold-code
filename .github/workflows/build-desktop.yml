@@ -21,11 +21,11 @@ jobs:
           - name: macOS ARM64
             runner: macos-14
             artifact: bold-code-macos-arm64
-            path: .build/VSCode-darwin-arm64/Bold Code.app
+            path: .build/packages/VSCode-darwin-arm64/Bold Code.app
           - name: Windows x64
             runner: windows-2022
             artifact: bold-code-windows-x64
-            path: .build/VSCode-win32-x64
+            path: .build/packages/VSCode-win32-x64
 
     steps:
       - name: Checkout
