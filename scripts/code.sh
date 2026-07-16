@@ -16,6 +16,17 @@ fi
 function code() {
 	cd "$ROOT"
 
+	# Keep launch behavior consistent with build.sh when the shell has another
+	# Node installation ahead of nvm in PATH.
+	if [[ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]]; then
+		# shellcheck disable=SC1090
+		. "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+		nvm use "$(<.nvmrc)" >/dev/null
+		nvm_node=$(nvm which "$(<.nvmrc)")
+		export PATH="$(dirname "${nvm_node}"):${PATH}"
+		hash -r
+	fi
+
 	if [[ "$OSTYPE" == "darwin"* ]]; then
 		NAME=`node -p "require('./product.json').nameLong"`
 		EXE_NAME=`node -p "require('./product.json').nameShort"`
@@ -27,6 +38,7 @@ function code() {
 
 	# Get electron, compile, built-in extensions
 	if [[ -z "${VSCODE_SKIP_PRELAUNCH}" ]]; then
+		node --experimental-strip-types ./scripts/prepare-ai-hub-extensions.ts
 		node build/lib/preLaunch.ts
 	fi
 

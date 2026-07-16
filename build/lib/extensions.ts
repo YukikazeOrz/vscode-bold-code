@@ -18,7 +18,7 @@ import fancyLog from 'fancy-log';
 import ansiColors from 'ansi-colors';
 import * as jsoncParser from 'jsonc-parser';
 import { getProductionDependencies } from './dependencies.ts';
-import { type IExtensionDefinition, getExtensionStream } from './builtInExtensions.ts';
+import { type IExtensionDefinition, getExtensionStream, resolveLocalExtensionVersion } from './builtInExtensions.ts';
 import { fetchUrls, fetchGithub } from './fetch.ts';
 import { createTsgoStream, spawnTsgo } from './tsgo.ts';
 import watcher from './watch/index.ts';
@@ -490,7 +490,7 @@ export function packageMarketplaceExtensionsStream(forWeb: boolean): Stream {
 		es.merge(
 			...marketplaceExtensionsDescriptions
 				.map(extension => {
-					const src = getExtensionStream(extension).pipe(rename(p => p.dirname = `extensions/${p.dirname}`));
+					const src = getExtensionStream(resolveLocalExtensionVersion(extension)).pipe(rename(p => p.dirname = `extensions/${p.dirname}`));
 					return updateExtensionPackageJSON(src, (data: any) => {
 						delete data.scripts;
 						delete data.dependencies;

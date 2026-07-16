@@ -36,7 +36,15 @@ export interface IExtensionDefinition {
 
 const root = path.dirname(path.dirname(import.meta.dirname));
 const productjson = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../../product.json'), 'utf8'));
-const builtInExtensions = productjson.builtInExtensions as IExtensionDefinition[] || [];
+const localExtensionsManifestPath = path.join(root, '.build', 'ai-hub-extensions', 'manifest.json');
+const localExtensionsManifest = fs.existsSync(localExtensionsManifestPath)
+	? JSON.parse(fs.readFileSync(localExtensionsManifestPath, 'utf8')).extensions as Record<string, Pick<IExtensionDefinition, 'version' | 'sha256'>>
+	: {};
+export function resolveLocalExtensionVersion(extension: IExtensionDefinition): IExtensionDefinition {
+	const localExtension = extension.vsix ? localExtensionsManifest[extension.vsix.split('/').pop()!] : undefined;
+	return localExtension ? { ...extension, ...localExtension } : extension;
+}
+const builtInExtensions = (productjson.builtInExtensions as IExtensionDefinition[] || []).map(resolveLocalExtensionVersion);
 const webBuiltInExtensions = productjson.webBuiltInExtensions as IExtensionDefinition[] || [];
 const controlFilePath = path.join(os.homedir(), '.vscode-oss-dev', 'extensions', 'control.json');
 const ENABLE_LOGGING = !process.env['VSCODE_BUILD_BUILTIN_EXTENSIONS_SILENCE_PLEASE'];
