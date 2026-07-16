@@ -34,10 +34,22 @@ async function latestVersion({ publisher, name, github }: Extension): Promise<Do
 		const response = await fetch(`https://api.github.com/repos/${github}/releases/latest`, { headers: { 'Accept': 'application/vnd.github+json' } });
 		const release = await response.json() as GitHubRelease;
 		const asset = release.assets?.find(asset => asset.name.endsWith('.vsix'));
-		if (!response.ok || !asset?.browser_download_url || typeof release.tag_name !== 'string') {
+		if (response.ok && asset?.browser_download_url && typeof release.tag_name === 'string') {
+			return { version: release.tag_name.replace(/^v/, ''), url: asset.browser_download_url };
+		}
+
+		// GitHub's REST API has a very small anonymous quota. The public releases
+		// redirect remains available when that quota is exhausted.
+		const latestPage = await fetch(`https://github.com/${github}/releases/latest`);
+		const tag = new URL(latestPage.url).pathname.match(/\/releases\/tag\/([^/]+)$/)?.[1];
+		if (!latestPage.ok || !tag) {
 			throw new Error(`GitHub did not return a VSIX release for ${publisher}.${name}.`);
 		}
-		return { version: release.tag_name.replace(/^v/, ''), url: asset.browser_download_url };
+		const version = tag.replace(/^v/, '');
+		return {
+			version,
+			url: `https://github.com/${github}/releases/download/${tag}/${name}-${version}.vsix`
+		};
 	}
 
 	const response = await fetch('https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery', {
@@ -76,11 +88,13 @@ const previousManifest: Manifest = await readFile(manifestPath, 'utf8')
 	.catch(() => ({ extensions: {} }));
 const manifest: Manifest = { extensions: {} };
 for (const extension of extensions) {
-	const { version, url, targetPlatform } = await latestVersion(extension);
 	const target = path.join(destination, extension.filename);
 	let hash = await checksum(target).catch(() => undefined);
 	const existingVersion = hash ? await vsixVersion(target).catch(() => undefined) : undefined;
-	if (existingVersion !== version || previousManifest.extensions[extension.filename]?.targetPlatform !== targetPlatform || previousManifest.extensions[extension.filename]?.sha256 !== hash) {
+	const { version, url, targetPlatform } = await latestVersion(extension);
+	const previousExtension = previousManifest.extensions[extension.filename];
+	const needsDownload = existingVersion !== version || (previousExtension !== undefined && (previousExtension.targetPlatform !== targetPlatform || previousExtension.sha256 !== hash));
+	if (needsDownload) {
 		console.log(`Downloading AI Hub extension: ${extension.publisher}.${extension.name}@${version}`);
 		const response = await fetch(url);
 		if (!response.ok) {
