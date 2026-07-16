@@ -3,13 +3,17 @@
 
 set -e
 
-if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
-  cp -rp src/insider/* vscode/
-else
-  cp -rp src/stable/* vscode/
-fi
+export VSCODE_SOURCE_MODE="${VSCODE_SOURCE_MODE:-yes}"
 
-cp -f LICENSE vscode/LICENSE.txt
+if [[ "${VSCODE_SOURCE_MODE}" != "yes" ]]; then
+  if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
+    cp -rp src/insider/* vscode/
+  else
+    cp -rp src/stable/* vscode/
+  fi
+
+  cp -f LICENSE vscode/LICENSE.txt
+fi
 
 cd vscode || { echo "'vscode' dir not found"; exit 1; }
 
@@ -339,39 +343,43 @@ if [[ "${DISABLE_UPDATE}" == "yes" ]]; then
   mv ../patches/00-update-disable.patch.yet ../patches/00-update-disable.patch
 fi
 
-for file in ../patches/*.json; do
-  if [[ -f "${file}" ]]; then
-    apply_actions "${file}"
-  fi
-done
+if [[ "${VSCODE_SOURCE_MODE}" != "yes" ]]; then
+  for file in ../patches/*.json; do
+    if [[ -f "${file}" ]]; then
+      apply_actions "${file}"
+    fi
+  done
 
-for file in ../patches/*.patch; do
-  if [[ -f "${file}" ]]; then
-    apply_patch "${file}"
-  fi
-done
-
-if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
-  for file in ../patches/insider/*.patch; do
+  for file in ../patches/*.patch; do
     if [[ -f "${file}" ]]; then
       apply_patch "${file}"
     fi
   done
-fi
 
-if [[ -d "../patches/${OS_NAME}/" ]]; then
-  for file in "../patches/${OS_NAME}/"*.patch; do
+  if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
+    for file in ../patches/insider/*.patch; do
+      if [[ -f "${file}" ]]; then
+        apply_patch "${file}"
+      fi
+    done
+  fi
+
+  if [[ -d "../patches/${OS_NAME}/" ]]; then
+    for file in "../patches/${OS_NAME}/"*.patch; do
+      if [[ -f "${file}" ]]; then
+        apply_patch "${file}"
+      fi
+    done
+  fi
+
+  for file in ../patches/user/*.patch; do
     if [[ -f "${file}" ]]; then
       apply_patch "${file}"
     fi
   done
+else
+  echo "Using direct VS Code source branch ${VSCODE_SOURCE_REF:-codex/vscode-source}; patch application skipped."
 fi
-
-for file in ../patches/user/*.patch; do
-  if [[ -f "${file}" ]]; then
-    apply_patch "${file}"
-  fi
-done
 # }}}
 
 set -x

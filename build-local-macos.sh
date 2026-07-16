@@ -27,6 +27,8 @@ fi
 
 export APP_NAME="${APP_NAME:-VSCodium}"
 export BINARY_NAME="${BINARY_NAME:-codium}"
+export CI_BUILD=no
+export VSCODE_SOURCE_MODE="${VSCODE_SOURCE_MODE:-yes}"
 export OS_NAME=osx
 export VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 export SHOULD_BUILD=yes
@@ -199,12 +201,12 @@ else
 fi
 
 echo ""
-echo "-- Step 1/3: Clone pinned upstream VS Code --"
+echo "-- Step 1/3: Checkout Bold Code VS Code source --"
 . ./get_repo.sh
 restore_builtin_extensions
 
 echo ""
-echo "-- Step 2/3: Build (apply patches, fetch bundled AI extensions, npm ci, gulp compile) --"
+echo "-- Step 2/3: Build source (fetch bundled AI extensions, npm ci, gulp compile) --"
 echo "   This is the long step — expect 30-90+ minutes depending on hardware."
 ./build.sh
 
